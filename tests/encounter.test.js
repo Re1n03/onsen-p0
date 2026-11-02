@@ -670,13 +670,16 @@ test('Y13 重录：强制蚁工头战斗→资源→回店快照', () => {
 });
 
 test('N24 pendingPickup 时 advance / settleNode 返回 NEED_SWAP，状态不变', () => {
-  const state = makeEncounter('ANT_FOREMAN');
+  const state = makeEncounter('ANT_FOREMAN', 1); // 固定种子，RNG 变化可复现
   state.explore.pendingEncounter = null;
   state.explore.pendingPickup = { itemId: 'MAT_001', count: 1 };
   state.explore.mood = 12;
   state.explore.depth = 4;
   state.explore.backpack = [{ itemId: 'MAT_002', count: 2 }];
   state.explore.lunchbox = { SNK_001: 1 };
+  // 篝火层不抽随机数、直接走 settleNode；清空后 advance 必然经过 drawNodeType，
+  // 种子断言才能真正证明「NEED_SWAP 检查发生在抽随机数之前」
+  state.explore.campfireDepths = [];
 
   const snapshot = () => JSON.stringify({
     mood: state.explore.mood,
@@ -687,9 +690,11 @@ test('N24 pendingPickup 时 advance / settleNode 返回 NEED_SWAP，状态不变
   });
   const before = snapshot();
 
+  const seedBeforeAdvance = state.rng.getSeed();
   const advanced = advance(state);
   assert.equal(advanced.ok, false);
   assert.equal(advanced.reason, 'NEED_SWAP');
+  assert.equal(state.rng.getSeed(), seedBeforeAdvance); // 拒绝时不得消耗随机数
   assert.equal(snapshot(), before);
 
   const settled = settleNode(state, 'RESOURCE');
