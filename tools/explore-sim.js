@@ -1,230 +1,569 @@
 /**
- * tools/explore-sim.js — 采风收益/风险模拟（纯 Node，无界面）
+ * tools/explore-sim.js — 采风（v2）策略模拟器 · 调参用
  *
  * 运行：node tools/explore-sim.js
+ *       node tools/explore-sim.js --runs=1000 --level=0
+ *       node tools/explore-sim.js --ant-affinity=10
+ *       node tools/explore-sim.js --loadout=L2 --snacks=3 --eat-below=2 --return=D7 --policy=NEG
  *
- * 规则来源：通过 src/explore.js 的公开入口（startExplore / advance /
- * resolveEncounter / returnHome / discardPending / splitLostItems）真实运行，
- * 与页面将来使用同一套规则；本脚本不修改任何规则代码，也不改 config.js。
+ * 约束：
+ *  - 只调用 src 的公开函数；不复制任何游戏规则（雅兴、深度、成功率、掉落、售价都来自 src/config）。
+ *  - 所有随机数走 state.rng（createInitialState(seed)）；同参数两次运行 DIGEST 相同。
+ *  - 单趟模拟：每趟从第 1 天开局状态出发，只跑一次采风，不跑营业日。
  *
- * 只模拟一次采风，不模拟营业日。种子 1~500，开局 A 碎片 0 张 / B 碎片 3 张。
+ * 净价值口径（不赎回）：
+ *   净价值 = 带回战利品的 sellItem 收入 − 离手装填物成本
+ *   离手装填物 = 吃掉的小食 / 谈判消耗的物品 / 逃跑消耗的材料 / 倒地时丢失的装填物，按 buyPrice 计。
+ *   赎金不计入净价值，只用 lostBagRansom() 另算「若赎回净价值 = 净价值 − 赎金」参考。
  */
 
-import {
-  ENCOUNTERS,
-  EXPLORE,
-  ITEM_VALUES,
-  MATERIALS,
-} from '../config.js';
-import { createInitialState, getHeart } from '../src/state.js';
+import { createHash } from 'node:crypto';
+import { MATERIALS, SNACKS, STARTING } from '../config.js';
+import { createInitialState } from '../src/state.js';
 import {
   advance,
   discardPending,
-  resolveEncounter,
+  eat,
+  fight,
+  flee,
+  negotiate,
+  returnCost,
   returnHome,
-  splitLostItems,
+  settleNode,
   startExplore,
 } from '../src/explore.js';
-import { goblinRatePermille, ransomGold } from '../src/lostfound.js';
+import { lostBagRansom } from '../src/lostfound.js';
+import { sellItem, upgradeMood } from '../src/actions.js';
 
-const TASK = {
-  seedFrom: 1,
-  seedCount: 500,
+// ============================================================
+// 参数
+// ============================================================
+const DEFAULTS = {
+  runs: 2000,
+  seed: 20261102,
+  level: 'grid',          // grid = [0, 2]；也可 --level=0..4
+  antAffinity: 0,
+  fragments: 0,
+  fallIncome: 1,          // 1 = 倒地趟保留战利品照常计收入；0 = 倒地趟收入记 0
+  loadout: null,
+  snacks: null,
+  eatBelow: null,
+  returnSpec: null,
+  policy: null,
+  digestOnly: false,
 };
 
-const MATERIAL_IDS = new Set(Object.keys(MATERIALS));
-const ENCOUNTER_PRIORITY = {
-  ANTHILL_FOREMAN: ['FEED', 'ESCAPE', 'TALK', 'VOUCHER'],
-  PALADIN_APPRENTICE: ['FEED', 'ESCAPE', 'TALK', 'VOUCHER'],
-};
-
-// ---------- 推进策略 ----------
-function marginAfterAdvance(state) {
-  const explore = state.explore;
-  const nextMood = explore.mood - EXPLORE.MOOD_COST_PER_NODE;
-  const nextDepth = explore.depth + EXPLORE.DEPTH_PER_NODE;
-  return nextMood - nextDepth;
-}
-
-const STRATEGIES = [
-  ...([0, 1, 2, 3].map((m) => ({
-    key: `m${m}`,
-    label: `安全边距 m=${m}`,
-    shouldReturn: (state) => marginAfterAdvance(state) < m,
-  }))),
-  ...([2, 3, 4, 5, 6].map((depth) => ({
-    key: `d${depth}`,
-    label: `固定深度 d=${depth}`,
-    shouldReturn: (state) => state.explore.depth >= depth,
-  }))),
-];
-
-const OPENINGS = [
-  { key: 'A', label: '开局 A：碎片 0', fragments: 0 },
-  { key: 'B', label: '开局 B：碎片 3', fragments: 3 },
-];
-
-// ---------- 小工具 ----------
-function cloneBackpack(backpack) {
-  return backpack.map((slot) => ({ itemId: slot.itemId, count: slot.count }));
-}
-
-function backpackValue(backpack) {
-  return backpack.reduce((sum, slot) => sum + (ITEM_VALUES[slot.itemId] ?? 0) * slot.count, 0);
-}
-
-function inventoryValue(inventory) {
-  return Object.entries(inventory).reduce(
-    (sum, [itemId, count]) => sum + (ITEM_VALUES[itemId] ?? 0) * count,
-    0,
-  );
-}
-
-function sumPieces(items) {
-  return items.reduce((sum, slot) => sum + slot.count, 0);
-}
-
-/** splitLostItems 返回的是单件列表（{itemId, value}），这里合并回 {itemId, count} */
-function aggregateItems(items) {
-  const counts = new Map();
-  for (const item of items) counts.set(item.itemId, (counts.get(item.itemId) ?? 0) + 1);
-  return [...counts.entries()].map(([itemId, count]) => ({ itemId, count }));
-}
-
-function optionAvailable(state, encounterId, optionId) {
-  const option = ENCOUNTERS[encounterId]?.options?.[optionId];
-  if (!option) return false;
-  if (state.explore.encounterTried?.[optionId]) return false;
-
-  const requires = option.requires ?? {};
-  if (requires.item && (state.inventory[requires.item] ?? 0) < requires.count) return false;
-  if (requires.voucher && state.vouchers < requires.voucher) return false;
-  if (requires.fragment && state.fragments < requires.fragment) return false;
-  if (requires.affinityHeart) {
-    const { npc, min } = requires.affinityHeart;
-    if (getHeart(state.affectionExp[npc] ?? 0) < min) return false;
-  }
-  return true;
-}
-
-/**
- * 处理当前待处理遭遇：按优先级尝试可用选项；失败则继续下一个；
- * 全部不可用 / 全部尝试过 → 返回 'UNRESOLVED'（外层再决定回店/倒地）。
- * @returns {'DONE'|'FALL'|'UNRESOLVED'}
- */
-function resolvePendingEncounter(state, tracker) {
-  const encounterId = state.explore.pendingEncounter;
-  const priority = ENCOUNTER_PRIORITY[encounterId];
-  const attempted = new Set();
-
-  while (state.explore && state.explore.pendingEncounter) {
-    const optionId = priority.find(
-      (id) => !attempted.has(id) && optionAvailable(state, encounterId, id),
-    );
-    if (!optionId) return 'UNRESOLVED';
-
-    attempted.add(optionId);
-    const beforeValue = inventoryValue(state.inventory);
-    const result = resolveEncounter(state, optionId);
-    tracker.consumedValue += Math.max(0, beforeValue - inventoryValue(state.inventory));
-
-    if (result.fell) {
-      tracker.fall = result.fall;
-      return 'FALL';
+function parseArgs(argv) {
+  const out = {};
+  for (const arg of argv) {
+    const match = /^--([^=]+)=(.*)$/.exec(arg);
+    if (!match) {
+      const flag = /^--([^=]+)$/.exec(arg);
+      if (flag) { out[flag[1]] = true; continue; }
+      throw new Error(`无法解析参数：${arg}`);
     }
-    if (result.needSwap) discardPending(state);
-    if (result.encounterEnded) return 'DONE';
-    // 失败、遭遇仍在：继续尝试下一个可用选项
+    out[match[1]] = match[2];
   }
-  return 'DONE';
+  return out;
 }
 
-// ---------- 跑一个种子的一次采风 ----------
-function simulateOnce(seed, fragments, strategy) {
-  const state = createInitialState({ seed });
-  state.fragments = fragments;
-  startExplore(state);
+const cli = parseArgs(process.argv.slice(2));
+const cfg = {
+  runs: cli.runs !== undefined ? Number(cli.runs) : DEFAULTS.runs,
+  seed: cli.seed !== undefined ? Number(cli.seed) : DEFAULTS.seed,
+  level: cli.level !== undefined ? cli.level : DEFAULTS.level,
+  antAffinity: cli['ant-affinity'] !== undefined ? Number(cli['ant-affinity']) : DEFAULTS.antAffinity,
+  fragments: cli.fragments !== undefined ? Number(cli.fragments) : DEFAULTS.fragments,
+  fallIncome: cli['fall-income'] !== undefined ? Number(cli['fall-income']) : DEFAULTS.fallIncome,
+  loadout: cli.loadout ?? null,
+  snacks: cli.snacks !== undefined ? Number(cli.snacks) : null,
+  eatBelow: cli['eat-below'] !== undefined ? Number(cli['eat-below']) : null,
+  returnSpec: cli.return ?? null,
+  policy: cli.policy ?? null,
+  digestOnly: Boolean(cli['digest-only']),
+};
+if (!Number.isInteger(cfg.runs) || cfg.runs <= 0) throw new Error('--runs 必须是正整数');
+if (!Number.isInteger(cfg.seed)) throw new Error('--seed 必须是整数');
+if (![0, 1].includes(cfg.fallIncome)) throw new Error('--fall-income 只能是 0 或 1');
 
-  const tracker = { consumedValue: 0, fall: null };
-  let lastBackpack = cloneBackpack(state.explore.backpack);
+// ============================================================
+// 固定表（全部是“策略参数”，不是游戏规则）
+// ============================================================
+const LOADOUTS = {
+  L1: { label: 'L1 轻装', backpack: { MAT_002: 1 } },
+  L2: { label: 'L2 标准', backpack: { MAT_002: 2, MAT_001: 1 } },
+  L3: { label: 'L3 重装', backpack: { MAT_002: 3, MAT_001: 2, MAT_003: 3 } },
+};
+
+/** 回店策略：'D5' = 深度≥5 回店；'m4' = 雅兴−returnCost ≤ 4 时回店（不吃小食）；'E2' = 续航型（同条件先吃小食，吃不到才回店） */
+function parseReturnSpec(text) {
+  if (text === 'D∞' || text === 'Dinf' || text === 'DInfinity') {
+    return { type: 'D', value: Infinity, label: 'D∞' };
+  }
+  const depth = /^D(\d+)$/.exec(text);
+  if (depth) return { type: 'D', value: Number(depth[1]), label: `D${depth[1]}` };
+  const margin = /^m(\d+)$/.exec(text);
+  if (margin) return { type: 'm', value: Number(margin[1]), label: `m${margin[1]}` };
+  const eatMargin = /^E(\d+)$/.exec(text);
+  if (eatMargin) return { type: 'EAT', value: Number(eatMargin[1]), label: `E${eatMargin[1]}` };
+  throw new Error(`无法解析回店策略：${text}`);
+}
+
+function buildCombinations() {
+  const explicit = cfg.loadout !== null || cfg.snacks !== null || cfg.eatBelow !== null
+    || cfg.returnSpec !== null || cfg.policy !== null;
+
+  const levels = cfg.level === 'grid' ? [0, 1, 2, 3, 4] : [Number(cfg.level)];
+  for (const level of levels) {
+    if (!Number.isInteger(level) || level < 0 || level > 4) throw new Error('--level 必须是 0~4');
+  }
+  if (explicit) {
+    const single = {
+      level: levels[0],
+      loadout: cfg.loadout ?? 'L1',
+      snacks: cfg.snacks ?? 2,
+      eatBelow: cfg.eatBelow ?? 2,
+      returnSpec: parseReturnSpec(cfg.returnSpec ?? 'D7'),
+      policy: cfg.policy ?? 'NEG',
+    };
+    if (cfg.level === 'grid') single.level = 0;
+    return [single];
+  }
+
+  const combos = [];
+  const returnSpecs = [
+    { type: 'm', value: 4, label: 'm4' },   // 对照组：不吃小食
+    { type: 'EAT', value: 2, label: 'E2' }, // 续航型 m2
+    { type: 'EAT', value: 4, label: 'E4' }, // 续航型 m4
+    { type: 'D', value: 5, label: 'D5' },   // 固定深度对照
+  ];
+  for (const level of levels) {
+    for (const loadout of ['L1']) {
+      for (const snacks of [0, 2, 4]) {
+        for (const eatBelow of [2]) {
+          for (const returnSpec of returnSpecs) {
+            for (const policy of ['NEG_SNK1', 'FIGHT']) {
+              combos.push({ level, loadout, snacks, eatBelow, returnSpec, policy });
+            }
+          }
+        }
+      }
+    }
+  }
+  return combos;
+}
+
+// ============================================================
+// 状态准备
+// ============================================================
+function applyLevel(state, level) {
+  if (level <= 0) return;
+  const startingGold = state.gold;
+  state.gold = 1_000_000; // 仅用于支付升级费，升级后立即还原
+  for (let index = 0; index < level; index += 1) {
+    const result = upgradeMood(state);
+    if (!result.ok) throw new Error(`upgradeMood 失败：${result.reason}`);
+  }
+  state.gold = startingGold;
+}
+
+function loadoutInventory(loadout, snacks) {
+  const inventory = { ...LOADOUTS[loadout].backpack };
+  if (snacks > 0) inventory.SNK_001 = snacks;
+  return inventory;
+}
+
+// ============================================================
+// 单趟模拟
+// ============================================================
+function countMap(backpack) {
+  const counts = {};
+  for (const slot of backpack) {
+    counts[slot.itemId] = (counts[slot.itemId] ?? 0) + slot.count;
+  }
+  return counts;
+}
+
+function positiveDiff(before, after) {
+  const additions = {};
+  for (const [itemId, count] of Object.entries(after)) {
+    const added = count - (before[itemId] ?? 0);
+    if (added > 0) additions[itemId] = added;
+  }
+  return additions;
+}
+
+function findFleeMaterial(explore) {
+  for (const slot of explore.backpack) {
+    if (MATERIALS[slot.itemId] && slot.count > 0) return slot.itemId;
+  }
+  return null;
+}
+
+function simulateOnce(combo, seed) {
+  const state = createInitialState({ seed });
+  applyLevel(state, combo.level);
+  state.fragments = cfg.fragments;
+  state.affectionExp.ANT_FOREMAN = cfg.antAffinity;
+
+  const loadout = LOADOUTS[combo.loadout];
+  state.inventory = loadoutInventory(combo.loadout, combo.snacks);
+
+  const started = startExplore(state, {
+    lunchbox: combo.snacks > 0 ? { SNK_001: combo.snacks } : {},
+    backpack: { ...loadout.backpack },
+  });
+  if (!started.ok) throw new Error(`startExplore 失败：${started.reason}（${combo.loadout} / 小食 ${combo.snacks}）`);
+
+  const tracker = {
+    eats: 0,
+    encounters: 0,
+    negAttempts: 0,
+    negSuccess: 0,
+    fights: 0,
+    flees: 0,
+    pendingDiscards: 0,
+    consumesCost: 0,      // 离手装填物成本
+    loot: {},             // 战利品账本（件数）
+    freeSnacks: 0,        // 野餐篮/偷食后“免费”小食的剩余量
+    fall: false,
+    fallCause: null,
+    fallDepth: 0,
+    maxDepth: 0,
+    returnDepth: null,
+    fleeDepth: null,
+    revenue: 0,
+    ransom: 0,
+    lostValue: 0,
+    endReason: null,
+    error: null,
+  };
+
+  function recordFall(fall) {
+    tracker.fall = true;
+    tracker.fallCause = fall.cause;
+    tracker.fallDepth = fall.depth;
+    tracker.maxDepth = Math.max(tracker.maxDepth, fall.depth);
+    tracker.lostValue = fall.lostBag.totalValue;
+    for (const item of fall.lostBag.items) {
+      const held = tracker.loot[item.itemId] ?? 0;
+      const lootLost = Math.min(held, item.count);
+      tracker.loot[item.itemId] = held - lootLost;
+      const loadoutLost = item.count - lootLost;
+      if (loadoutLost > 0) {
+        tracker.consumesCost += (MATERIALS[item.itemId]?.buyPrice ?? 0) * loadoutLost;
+      }
+    }
+  }
+
+  function consumeSnack() {
+    if (tracker.freeSnacks > 0) tracker.freeSnacks -= 1;
+    else tracker.consumesCost += SNACKS.SNK_001.buyPrice;
+  }
+
+  function consumeOfferItem(itemId) {
+    if (itemId === 'FRAGMENT') return;
+    if (itemId === 'SNK_001') { consumeSnack(); return; }
+    if (MATERIALS[itemId]) tracker.consumesCost += MATERIALS[itemId].buyPrice;
+  }
+
+  function doFight() {
+    const result = fight(state);
+    if (!result.ok) {
+      tracker.error = result.reason;
+      tracker.endReason = 'ERROR';
+      return;
+    }
+    tracker.fights += 1;
+    if (result.fell) {
+      recordFall(result.fall);
+      tracker.endReason = 'FALL';
+      return;
+    }
+    if (result.needSwap) {
+      discardPending(state);
+      tracker.pendingDiscards += 1;
+    } else if (result.loot) {
+      tracker.loot[result.loot] = (tracker.loot[result.loot] ?? 0) + 1;
+    }
+  }
+
+  function buildOffer(policy) {
+    if (policy === 'NEG') return [];
+    const want = policy === 'NEG_SNK1' ? 1 : 3;
+    const available = state.explore.lunchbox.SNK_001 ?? 0;
+    const count = Math.min(want, available);
+    return Array(count).fill('SNK_001');
+  }
+
+  function resolveEncounter() {
+    tracker.encounters += 1;
+    const policy = combo.policy;
+
+    if (policy === 'NEG' || policy === 'NEG_SNK1' || policy === 'NEG_SNK3') {
+      if (!state.explore.negotiationTried) {
+        const offer = buildOffer(policy);
+        const result = negotiate(state, offer);
+        if (result.ok) {
+          tracker.negAttempts += 1;
+          for (const itemId of offer) consumeOfferItem(itemId);
+          if (result.success) {
+            tracker.negSuccess += 1;
+            if (result.needSwap) {
+              discardPending(state);
+              tracker.pendingDiscards += 1;
+            } else if (result.gift) {
+              tracker.loot[result.gift] = (tracker.loot[result.gift] ?? 0) + 1;
+            }
+          }
+        }
+      }
+      if (state.explore && state.explore.pendingEncounter) doFight();
+      return;
+    }
+
+    if (policy === 'FIGHT') {
+      doFight();
+      return;
+    }
+
+    if (policy === 'FLEE') {
+      const materialId = findFleeMaterial(state.explore);
+      if (!materialId) { doFight(); return; }
+      const result = flee(state, materialId);
+      if (!result.ok) { doFight(); return; }
+      tracker.flees += 1;
+      tracker.consumesCost += MATERIALS[materialId].buyPrice;
+      if (result.fell) {
+        recordFall(result.fall);
+        tracker.endReason = 'FALL';
+      } else {
+        tracker.endReason = 'FLEE_RETURN';
+      }
+      return;
+    }
+
+    throw new Error(`未知遭遇策略：${policy}`);
+  }
 
   while (state.explore) {
-    if (strategy.shouldReturn(state)) break;
+    const explore = state.explore;
+    tracker.maxDepth = Math.max(tracker.maxDepth, explore.depth);
 
-    lastBackpack = cloneBackpack(state.explore.backpack);
-    const result = advance(state);
+    // 1) 回店判断
+    const marginReached = () => Boolean(state.explore)
+      && state.explore.mood - returnCost(state) <= combo.returnSpec.value;
 
-    if (result.fell) {
-      tracker.fall = result.fall;
+    let shouldReturn;
+    if (combo.returnSpec.type === 'EAT') {
+      // 续航型：先按边距条件吃小食，吃到安全为止；没小食了才回店
+      let guard = 0;
+      while (marginReached() && (state.explore.lunchbox.SNK_001 ?? 0) > 0 && guard < 30) {
+        const eaten = eat(state);
+        if (!eaten.ok) break;
+        tracker.eats += 1;
+        consumeSnack();
+        guard += 1;
+      }
+      shouldReturn = marginReached();
+    } else if (combo.returnSpec.type === 'D') {
+      shouldReturn = explore.depth >= combo.returnSpec.value;
+    } else {
+      shouldReturn = marginReached();
+    }
+    if (shouldReturn) {
+      tracker.returnDepth = explore.depth;
+      const result = returnHome(state);
+      if (result.fell) {
+        recordFall(result.fall);
+        tracker.returnDepth = null;
+        tracker.endReason = 'FALL';
+      } else {
+        tracker.endReason = 'RETURN';
+      }
       break;
     }
-    if (result.needSwap) discardPending(state);
 
-    if (result.nodeType === 'ENCOUNTER') {
-      const outcome = resolvePendingEncounter(state, tracker);
-      if (outcome === 'FALL') break;
-      if (outcome === 'UNRESOLVED') break; // 外层回店，可能倒地
+    // 2) 吃小食（阈值触发）
+    while (state.explore
+      && (state.explore.lunchbox.SNK_001 ?? 0) > 0
+      && state.explore.mood <= combo.eatBelow) {
+      const result = eat(state);
+      if (!result.ok) break;
+      tracker.eats += 1;
+      consumeSnack();
     }
-  }
+    if (!state.explore) break;
 
-  let brought = [];
-  let lostValue = 0;
-  let depth = 0;
-  let fell = false;
+    // 3) 推进一个节点
+    const backpackBefore = countMap(state.explore.backpack);
+    const lunchBefore = state.explore.lunchbox.SNK_001 ?? 0;
+    const result = advance(state);
 
-  if (state.explore) {
-    depth = state.explore.depth;
-    const backpackBefore = cloneBackpack(state.explore.backpack);
-    const result = returnHome(state);
+    if (!result.ok) {
+      tracker.error = result.reason;
+      tracker.endReason = 'ERROR';
+      break;
+    }
+
     if (result.fell) {
-      fell = true;
-      lostValue = result.fall.lostBag.totalValue;
-      brought = aggregateItems(splitLostItems(backpackBefore).kept);
-    } else {
-      brought = backpackBefore;
+      recordFall(result.fall);
+      tracker.endReason = 'FALL';
+      break;
     }
-  } else if (tracker.fall) {
-    fell = true;
-    depth = tracker.fall.depth;
-    lostValue = tracker.fall.lostBag.totalValue;
-    brought = aggregateItems(splitLostItems(lastBackpack).kept);
-  } else {
-    depth = 0;
+
+    // 小食数量变化（事件：野餐篮 / 野兽偷食）
+    const lunchAfter = state.explore.lunchbox.SNK_001 ?? 0;
+    if (lunchAfter > lunchBefore) {
+      tracker.freeSnacks += lunchAfter - lunchBefore;
+    } else if (lunchAfter < lunchBefore) {
+      let stolen = lunchBefore - lunchAfter;
+      while (stolen > 0) { consumeSnack(); stolen -= 1; }
+    }
+
+    // 资源点战利品：以背包实际增量为准（NEED_SWAP 的 pending 件不计）
+    if (result.nodeType === 'RESOURCE') {
+      const backpackAfter = countMap(state.explore.backpack);
+      for (const [itemId, count] of Object.entries(positiveDiff(backpackBefore, backpackAfter))) {
+        tracker.loot[itemId] = (tracker.loot[itemId] ?? 0) + count;
+      }
+    }
+
+    if (result.needSwap) {
+      discardPending(state);
+      tracker.pendingDiscards += 1;
+    }
+
+    // 4) 遭遇
+    if (state.explore && state.explore.pendingEncounter) {
+      resolveEncounter();
+      if (!state.explore) break;
+    }
+    if (tracker.endReason === 'ERROR') break;
   }
 
-  const materialPieces = brought
-    .filter((slot) => MATERIAL_IDS.has(slot.itemId))
-    .reduce((sum, slot) => sum + slot.count, 0);
-  const rarePieces = sumPieces(brought) - materialPieces;
-  const broughtValue = backpackValue(brought);
-  const net = broughtValue - tracker.consumedValue;
-  const ransom = fell ? ransomGold(lostValue, goblinRatePermille(1)) : 0;
+  if (!tracker.endReason) tracker.endReason = tracker.fall ? 'FALL' : 'UNKNOWN';
 
+  // 野餐篮多出来的小食在回店/倒地后也回到库存，作为战利品出售
+  if (tracker.freeSnacks > 0 && state.explore === null) {
+    tracker.loot.SNK_001 = (tracker.loot.SNK_001 ?? 0) + tracker.freeSnacks;
+    tracker.freeSnacks = 0;
+  }
+
+  // 战利品出售（倒地趟可用 --fall-income=0 关闭）
+  if (state.explore === null && !(tracker.fall && cfg.fallIncome === 0)) {
+    for (const [itemId, count] of Object.entries(tracker.loot)) {
+      if (count <= 0) continue;
+      const held = state.inventory[itemId] ?? 0;
+      const qty = Math.min(count, held);
+      if (qty <= 0) continue;
+      const result = sellItem(state, itemId, qty);
+      if (result.ok) tracker.revenue += result.totalGold;
+    }
+  }
+
+  // 赎金只做参考列
+  if (tracker.fall && state.lostBags.length > 0) {
+    const bag = state.lostBags[state.lostBags.length - 1];
+    tracker.ransom = lostBagRansom(state, bag).gold;
+  }
+
+  const net = tracker.revenue - tracker.consumesCost;
   return {
-    fell,
-    depth,
-    broughtPieces: sumPieces(brought),
-    materialPieces,
-    rarePieces,
-    broughtValue,
-    consumedValue: tracker.consumedValue,
-    lostValue,
+    endReason: tracker.endReason,
+    error: tracker.error,
+    fell: tracker.fall,
+    fallCause: tracker.fallCause,
+    fallDepth: tracker.fallDepth,
+    maxDepth: tracker.maxDepth,
+    returnDepth: tracker.returnDepth,
+    fleeDepth: tracker.fleeDepth,
+    revenue: tracker.revenue,
+    consumesCost: tracker.consumesCost,
     net,
-    ransom,
-    netAfterRansom: net - ransom,
+    netIfRedeemed: net - tracker.ransom,
+    ransom: tracker.ransom,
+    lostValue: tracker.lostValue,
+    encounters: tracker.encounters,
+    negAttempts: tracker.negAttempts,
+    negSuccess: tracker.negSuccess,
+    fights: tracker.fights,
+    flees: tracker.flees,
+    eats: tracker.eats,
+    pendingDiscards: tracker.pendingDiscards,
   };
 }
 
-// ---------- 汇总 ----------
-const average = (rows, key) => rows.reduce((sum, row) => sum + row[key], 0) / rows.length;
-const ratio = (rows, predicate) => rows.filter(predicate).length / rows.length;
+// ============================================================
+// 汇总与输出
+// ============================================================
+function newAggregate() {
+  return {
+    runs: 0,
+    falls: 0,
+    fallDepthSum: 0,
+    maxDepthSum: 0,
+    returns: 0,
+    returnDepthSum: 0,
+    netSum: 0,
+    netRedeemedSum: 0,
+    revenueSum: 0,
+    costSum: 0,
+    ransomSum: 0,
+    fleeReturns: 0,
+    errors: 0,
+    encounters: 0,
+    negAttempts: 0,
+    negSuccess: 0,
+    fights: 0,
+    flees: 0,
+    eats: 0,
+    pendingDiscards: 0,
+    survival: Array.from({ length: 13 }, () => 0),
+    fallDist: Array.from({ length: 14 }, () => 0),
+    maxDepthDist: Array.from({ length: 14 }, () => 0),
+  };
+}
 
-function runStrategy(seedCount, fragments, strategy) {
-  const rows = [];
-  for (let offset = 0; offset < seedCount; offset += 1) {
-    rows.push(simulateOnce(TASK.seedFrom + offset, fragments, strategy));
+function aggregateRun(agg, row) {
+  agg.runs += 1;
+  agg.maxDepthSum += row.maxDepth;
+  if (row.fell) {
+    agg.falls += 1;
+    agg.fallDepthSum += row.fallDepth;
+    agg.fallDist[Math.min(row.fallDepth, 13)] += 1;
+    agg.maxDepthDist[Math.min(row.maxDepth, 13)] += 1;
   }
-  return rows;
+  if (row.endReason === 'RETURN' && row.returnDepth !== null) {
+    agg.returns += 1;
+    agg.returnDepthSum += row.returnDepth;
+  }
+  if (row.endReason === 'FLEE_RETURN') agg.fleeReturns += 1;
+  if (row.endReason === 'ERROR') agg.errors += 1;
+  agg.netSum += row.net;
+  agg.netRedeemedSum += row.netIfRedeemed;
+  agg.revenueSum += row.revenue;
+  agg.costSum += row.consumesCost;
+  agg.ransomSum += row.ransom;
+  agg.encounters += row.encounters;
+  agg.negAttempts += row.negAttempts;
+  agg.negSuccess += row.negSuccess;
+  agg.fights += row.fights;
+  agg.flees += row.flees;
+  agg.eats += row.eats;
+  agg.pendingDiscards += row.pendingDiscards;
+  for (let depth = 1; depth <= 12; depth += 1) {
+    if (row.maxDepth >= depth) agg.survival[depth] += 1;
+  }
+}
+
+const average = (sum, count) => (count > 0 ? sum / count : null);
+const pct = (value) => (value === null ? '—' : `${(value * 100).toFixed(2)}%`);
+const money = (value) => (value === null ? '—' : value.toFixed(2));
+
+function comboId(combo) {
+  const returnLabel = combo.returnSpec.label;
+  return `V${combo.level}-${combo.loadout}-S${combo.snacks}-X${combo.eatBelow}-${returnLabel}-${combo.policy}`;
 }
 
 function displayWidth(text) {
@@ -248,62 +587,207 @@ function printTable(headers, rows) {
   for (const row of rows) console.log(line(row));
 }
 
-console.log('口径：');
-console.log('  - 种子 1~500，每次从第 1 天开局状态开始，只跑一次采风，不跑营业日。');
-console.log('  - 开局 A：心事碎片 0 张；开局 B：3 张；不吃小食。');
-console.log('  - 遭遇按给定优先级尝试，每个选项每场遭遇只尝试一次；失败后换下一优先项。');
-console.log('  - 带回物品 = 背包最终保留/并入库存的物品（不含开局库存）；消耗品估值按 ITEM_VALUES。');
-console.log('  - 体验券与心事碎片在 ITEM_VALUES 里没有估值，按 0 计（只消耗不记价值）。');
-console.log('  - 背包满溢（NEED_SWAP）时直接放弃新物品（不换格），不计入带回。');
-console.log('  - 倒地赎金按「地精 100%」、第 1 天 N=1 的 1000‰ 计算，= 丢失估值。');
-console.log('  - 净库存价值变化 = 带回物品估值 − 遭遇消耗品估值。');
+// ============================================================
+// 主流程
+// ============================================================
+const combos = buildCombinations();
+const startedAt = process.hrtime.bigint();
+const digest = createHash('sha256');
 
-const all = [];
-for (const opening of OPENINGS) {
-  console.log(`\n=== ${opening.label} · ${TASK.seedCount} 个种子平均 ===`);
-  const rows = STRATEGIES.map((strategy) => {
-    const results = runStrategy(TASK.seedCount, opening.fragments, strategy);
-    all.push({ opening, strategy, results });
-    return [
-      strategy.label,
-      `${(ratio(results, (r) => r.fell) * 100).toFixed(2)}%`,
-      `${(ratio(results, (r) => !r.fell) * 100).toFixed(2)}%`,
-      average(results, 'depth').toFixed(2),
-      average(results, 'broughtPieces').toFixed(2),
-      average(results, 'materialPieces').toFixed(2),
-      average(results, 'rarePieces').toFixed(2),
-      average(results, 'broughtValue').toFixed(2),
-      average(results, 'consumedValue').toFixed(2),
-      average(results, 'lostValue').toFixed(2),
-      average(results, 'net').toFixed(2),
-      `${(ratio(results, (r) => r.materialPieces >= 8) * 100).toFixed(2)}%`,
-      average(results, 'ransom').toFixed(2),
-      average(results, 'netAfterRansom').toFixed(2),
-    ];
-  });
-
-  printTable(
-    ['策略', '倒地率', '回店成功率', '平均步数', '带回总件数', '材料件数', '稀有件数',
-      '带回估值', '遭遇消耗估值', '倒地丢失估值', '净库存变化', '材料≥8比例', '赎金合计', '净−赎金'],
-    rows,
-  );
+const results = [];
+for (const combo of combos) {
+  const agg = newAggregate();
+  for (let runIndex = 0; runIndex < cfg.runs; runIndex += 1) {
+    const seed = cfg.seed + runIndex;
+    const row = simulateOnce(combo, seed);
+    aggregateRun(agg, row);
+    digest.update(JSON.stringify([
+      comboId(combo), runIndex, row.endReason, row.fell ? 1 : 0, row.fallDepth, row.maxDepth,
+      row.returnDepth, row.revenue, row.consumesCost, row.net, row.ransom,
+      row.encounters, row.negAttempts, row.negSuccess, row.fights, row.flees, row.eats,
+      row.pendingDiscards,
+    ]));
+    digest.update('\n');
+  }
+  results.push({ combo, agg });
 }
 
-console.log('\n=== 汇总：各策略（A/B 开局并排） ===');
-const summaryRows = STRATEGIES.map((strategy) => {
-  const cells = [strategy.label];
-  for (const opening of OPENINGS) {
-    const entry = all.find((item) => item.opening.key === opening.key && item.strategy.key === strategy.key);
-    const results = entry.results;
-    cells.push(`${(ratio(results, (r) => r.fell) * 100).toFixed(2)}%`);
-    cells.push(average(results, 'net').toFixed(2));
-    cells.push(Math.min(...results.map((r) => r.net)).toFixed(2));
-    cells.push(`${(ratio(results, (r) => r.materialPieces >= 8) * 100).toFixed(2)}%`);
-  }
-  return cells;
-});
+const elapsedSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+const digestHex = digest.digest('hex');
 
-printTable(
-  ['策略', 'A 倒地率', 'A 净均值', 'A 净最小', 'A 材料≥8', 'B 倒地率', 'B 净均值', 'B 净最小', 'B 材料≥8'],
-  summaryRows,
-);
+if (cfg.digestOnly) {
+  console.log(`组合数=${combos.length} 每组趟数=${cfg.runs} 总趟数=${combos.length * cfg.runs}`);
+  console.log(`运行时间=${elapsedSeconds.toFixed(2)}s`);
+  console.log(`DIGEST=${digestHex}`);
+  process.exit(0);
+}
+
+const levelLabels = [...new Set(combos.map((combo) => combo.level))].sort((a, b) => a - b);
+
+/** 纯资源点安全深度：无小食、无事件、每层强制资源点；返回仍能成功回店（雅兴 ≥ returnCost）的最深深度 */
+function measurePureResourceSafeDepth(level) {
+  const state = createInitialState({ seed: cfg.seed });
+  applyLevel(state, level);
+  state.inventory = {};
+  const started = startExplore(state);
+  if (!started.ok) throw new Error(`安全深度模拟 startExplore 失败：${started.reason}`);
+  let safeDepth = 0;
+  for (let step = 0; step < 60 && state.explore; step += 1) {
+    const result = settleNode(state, 'RESOURCE');
+    if (!result.ok || result.fell) break;
+    if (state.explore.pendingPickup) discardPending(state);
+    if (state.explore.mood >= returnCost(state)) safeDepth = state.explore.depth;
+    else break;
+  }
+  return safeDepth;
+}
+
+const safeDepthText = levelLabels
+  .map((level) => `等级${level}=${measurePureResourceSafeDepth(level)}`)
+  .join(' / ');
+
+console.log('口径：');
+console.log('  - 单趟模拟：每趟从第 1 天开局状态出发，只跑一次采风，不跑营业日。');
+console.log(`  - 种子 = ${cfg.seed} + 趟序号；每组 ${cfg.runs} 趟；所有策略共用同一组种子。`);
+console.log('  - 净价值 = 战利品 sellItem 收入 − 离手装填物成本（买价）；赎金不计入净价值。');
+console.log('    「若赎回净价值」= 净价值 − lostBagRansom()，仅供参考。');
+console.log(`  - 倒地趟战利品收入：${cfg.fallIncome === 0 ? '记 0（--fall-income=0）' : '照常计入'}` +
+  `；碎片=${cfg.fragments}；蚁工头好感经验=${cfg.antAffinity}；背包满固定 discardPending。`);
+console.log(`  - 雅兴等级：${levelLabels.join(' / ')}；装填只用 L1；小食 0/2/4 份；吃小食阈值 X=2；`);
+console.log('  - 回店策略：m4 = 边距（不吃小食对照组）；E2/E4 = 续航型 EAT_MARGIN（先按边距吃小食，吃不到才回店）；D5 = 固定深度对照。');
+console.log(`  - 各等级纯资源点安全深度（无小食、无事件、每层强制资源点，能成功回店的最深深度）：${safeDepthText}`);
+console.log('');
+console.log(`组合数=${combos.length} 每组趟数=${cfg.runs} 总趟数=${combos.length * cfg.runs} 运行时间=${elapsedSeconds.toFixed(2)}s`);
+console.log(`DIGEST=${digestHex}`);
+console.log('');
+
+// ---------- 表 1：策略汇总 ----------
+function summaryRow({ combo, agg }) {
+  const fallRate = agg.falls / agg.runs;
+  const avgFallDepth = average(agg.fallDepthSum, agg.falls);
+  const avgReturnDepth = average(agg.returnDepthSum, agg.returns);
+  const avgNet = average(agg.netSum, agg.runs);
+  const avgNetRedeemed = average(agg.netRedeemedSum, agg.runs);
+  const negRate = avgNegRate(agg);
+  return [
+    comboId(combo),
+    String(combo.level),
+    combo.loadout,
+    String(combo.snacks),
+    String(combo.eatBelow),
+    combo.returnSpec.type === 'D' ? '深度' : combo.returnSpec.type === 'EAT' ? '续航' : '边距',
+    combo.returnSpec.value === Infinity ? '∞' : String(combo.returnSpec.value),
+    combo.policy,
+    pct(fallRate),
+    avgFallDepth === null ? '—' : avgFallDepth.toFixed(2),
+    avgReturnDepth === null ? '—' : avgReturnDepth.toFixed(2),
+    money(avgNet),
+    money(avgNetRedeemed),
+    (agg.negAttempts / agg.runs).toFixed(2),
+    negRate,
+    (agg.fights / agg.runs).toFixed(2),
+    (agg.flees / agg.runs).toFixed(2),
+    (agg.encounters / agg.runs).toFixed(2),
+    (agg.eats / agg.runs).toFixed(2),
+  ];
+}
+
+function avgNegRate(agg) {
+  return agg.negAttempts > 0 ? `${((agg.negSuccess / agg.negAttempts) * 100).toFixed(2)}%` : '—';
+}
+
+const TABLE1_HEADERS = [
+  'ID', '等级', '装填', '食', 'X', '回店类型', '回店值', '遭遇',
+  '倒地率', '平均倒地深度', '平均回店深度', '平均净价值', '若赎回净价值',
+  '谈判尝试/趟', '谈判成功率', '战斗/趟', '逃跑/趟', '遭遇/趟', '吃/趟',
+];
+
+console.log('=== 表 1：策略汇总 ===');
+printTable(TABLE1_HEADERS, results.map(summaryRow));
+console.log('');
+
+// ---------- 表 2：倒地率 15%~30% ----------
+const target = results.filter(({ agg }) => {
+  const rate = agg.falls / agg.runs;
+  return rate >= 0.15 && rate <= 0.30;
+});
+console.log('=== 表 2：倒地率 15%~30% 的策略组合 ===');
+if (target.length === 0) {
+  console.log('（无）');
+} else {
+  printTable(TABLE1_HEADERS, target
+    .slice()
+    .sort((a, b) => (a.agg.falls / a.agg.runs) - (b.agg.falls / b.agg.runs))
+    .map(summaryRow));
+}
+console.log('');
+
+// ---------- 表 3：生存率曲线 ----------
+const survivalHeaders = ['ID', ...Array.from({ length: 12 }, (_, index) => `d${index + 1}`)];
+const survivalRows = results.map(({ combo, agg }) => [
+  comboId(combo),
+  ...Array.from({ length: 12 }, (_, index) => pct(agg.survival[index + 1] / agg.runs)),
+]);
+console.log('=== 表 3：到达各深度的生存率（S(d) = 曾到达深度 ≥ d 的趟数占比） ===');
+printTable(survivalHeaders, survivalRows);
+console.log('');
+
+// ---------- 表 4：倒地趟的最大深度分布（表 2 策略） ----------
+const depthDistHeaders = ['ID', ...Array.from({ length: 12 }, (_, index) => `第${index + 1}层`), '>12层'];
+const maxDepthRows = target.map(({ combo, agg }) => [
+  comboId(combo),
+  ...Array.from({ length: 13 }, (_, index) => {
+    if (agg.falls === 0) return '—';
+    return pct(agg.maxDepthDist[index + 1] / agg.falls);
+  }),
+]);
+console.log('=== 表 4：倒地趟的最大深度分布（占该策略倒地总趟数的比例；口径同表 3 的 maxDepth） ===');
+if (maxDepthRows.length === 0) {
+  console.log('（无）');
+} else {
+  printTable(depthDistHeaders, maxDepthRows);
+}
+console.log('');
+
+// ---------- 表 5：倒地发生层分布（表 2 策略） ----------
+const fallRows = target.map(({ combo, agg }) => [
+  comboId(combo),
+  ...Array.from({ length: 13 }, (_, index) => {
+    if (agg.falls === 0) return '—';
+    return pct(agg.fallDist[index + 1] / agg.falls);
+  }),
+]);
+console.log('=== 表 5：倒地发生层分布（占该策略倒地总趟数的比例） ===');
+console.log('    注：返程不足时倒地位置 = 深度 − 剩余雅兴，不是最大深度。');
+if (fallRows.length === 0) {
+  console.log('（无）');
+} else {
+  printTable(depthDistHeaders, fallRows);
+}
+console.log('');
+
+// ---------- 表 6：按等级的推荐区间 ----------
+console.log('=== 表 6：按等级的推荐区间（倒地率 15%~30% 中平均最大深度最大的前 3 行） ===');
+for (const level of levelLabels) {
+  const rows = target
+    .filter(({ combo }) => combo.level === level)
+    .slice()
+    .sort((a, b) => (b.agg.maxDepthSum / b.agg.runs) - (a.agg.maxDepthSum / a.agg.runs))
+    .slice(0, 3)
+    .map(({ combo, agg }) => [
+      comboId(combo),
+      pct(agg.falls / agg.runs),
+      (agg.maxDepthSum / agg.runs).toFixed(2),
+      money(agg.netSum / agg.runs),
+    ]);
+  console.log(`等级 ${level}：`);
+  if (rows.length === 0) {
+    console.log('（无）');
+  } else {
+    printTable(['ID', '倒地率', '平均最大深度', '平均净价值'], rows);
+  }
+}
+console.log('');
+
+const errors = results.reduce((sum, entry) => sum + entry.agg.errors, 0);
+console.log(`校验：总趟数=${combos.length * cfg.runs} 异常趟数=${errors} 运行时间=${elapsedSeconds.toFixed(2)}s`);
