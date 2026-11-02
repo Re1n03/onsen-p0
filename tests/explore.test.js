@@ -331,9 +331,14 @@ test('X12b 遭遇待处理：advance 返回 ENCOUNTER_PENDING 且状态不变', 
   const depthBefore = state.explore.depth;
   const backpackBefore = JSON.stringify(state.explore.backpack);
 
+  // 篝火层不抽随机数、直接走 settleNode；清空后 advance 必然经过 drawNodeType，
+  // 种子断言才能真正证明「ENCOUNTER_PENDING 检查发生在抽随机数之前」
+  state.explore.campfireDepths = [];
+  const seedBefore = state.rng.getSeed();
   const second = advance(state);
   assert.equal(second.ok, false);
   assert.equal(second.reason, 'ENCOUNTER_PENDING');
+  assert.equal(state.rng.getSeed(), seedBefore); // 拒绝时不得消耗随机数
   assert.equal(state.explore.mood, moodBefore);
   assert.equal(state.explore.depth, depthBefore);
   assert.equal(JSON.stringify(state.explore.backpack), backpackBefore);
