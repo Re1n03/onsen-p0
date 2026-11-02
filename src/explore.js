@@ -401,6 +401,8 @@ export function eat(state, snackId = 'SNK_001') {
 /** 回店：支付 1 × 当前深度；成功则背包 + 野餐盒剩余全部并回库存 */
 export function returnHome(state) {
   if (!state.explore) return fail('NOT_EXPLORING');
+  // 背包满溢待换格的物品必须先换格/放弃，否则回店会把它静默吞掉
+  if (state.explore.pendingPickup) return fail('NEED_SWAP');
   return finishAdventureReturn(state);
 }
 
@@ -563,6 +565,9 @@ export function fight(state) {
 export function flee(state, materialId) {
   const explore = state.explore;
   if (!explore) return fail('NOT_EXPLORING');
+  // NEED_SWAP 必须先于 NO_ENCOUNTER / NO_MATERIAL：否则背包满+谈判成功后无法获知真实原因，
+  // 也可能在未处理待换格物品时直接结束采风
+  if (explore.pendingPickup) return fail('NEED_SWAP');
   if (!explore.pendingEncounter) return fail('NO_ENCOUNTER');
 
   if (!MATERIALS[materialId] || backpackCount(explore.backpack, materialId) < 1) {
