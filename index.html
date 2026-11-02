@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>迷宫尽头的解忧温泉馆 · P0</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>迷宫尽头的解忧温泉馆 <small>P0 验证版</small></h1>
+    <div id="hud" class="hud"></div>
+    <div class="controls">
+      <div id="speed-buttons" class="speeds"></div>
+      <label class="seed-label">种子 <input id="seed" type="number" step="1" inputmode="numeric"></label>
+      <div id="run-buttons" class="run-buttons"></div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel">
+      <h2>汤池</h2>
+      <div id="pool-state" class="pool-state"></div>
+      <div id="slots" class="slots"></div>
+      <div id="seat-cards" class="seats"></div>
+      <div id="pool-actions" class="actions-row"></div>
+    </section>
+
+    <aside class="panel">
+      <h2>前台</h2>
+      <div id="queue" class="line"></div>
+      <div id="tray" class="line"></div>
+
+      <h2>库存 <small>（点材料选中，再点投料槽投入）</small></h2>
+      <div id="inventory" class="inventory"></div>
+
+      <h2>补给箱</h2>
+      <div id="shop" class="shop"></div>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="overlay" class="overlay" hidden>
+    <div id="report" class="report"></div>
+  </div>
+
+  <script type="module" src="./src/ui.js"></script>
+</body>
+</html>
