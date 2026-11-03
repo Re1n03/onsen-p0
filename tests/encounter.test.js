@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ENCOUNTERS } from '../config.js';
+import { ENCOUNTERS, VISIT } from '../config.js';
 import { createInitialState } from '../src/state.js';
 import { createRng } from '../src/rng.js';
 import {
@@ -293,14 +293,14 @@ test('N11 普通回店不足：6/5→1；5/4→1；4/1→3；相等成功', () =
   assert.equal(returnHome(equal).fell, false);
 });
 
-test('N12 邀请：券3→2、同NPC一次、无券 NO_VOUCHER、遭遇仍在、好感不变、chance25', () => {
+test('N12 邀请：券3→2、同NPC一次、无券 NO_VOUCHER、遭遇仍在、好感不变、chance16', () => {
   const state = makeEncounter('ANT_FOREMAN');
   state.vouchers = 3;
   const expBefore = state.affectionExp.ANT_FOREMAN;
 
   const result = invite(state);
   assert.equal(result.ok, true);
-  assert.equal(result.chance, 25);
+  assert.equal(result.chance, 16);
   assert.equal(state.vouchers, 2);
   assert.deepEqual(state.invites, [{ npcId: 'ANT_FOREMAN', day: 1 }]);
   assert.equal(state.explore.pendingEncounter, 'ANT_FOREMAN');
@@ -313,10 +313,10 @@ test('N12 邀请：券3→2、同NPC一次、无券 NO_VOUCHER、遭遇仍在、
   assert.equal(invite(none).reason, 'NO_VOUCHER');
 });
 
-test('N13 邀请到访：两位 NPC chance 25；10000 次 23%~27% 记入 pendingVisitors', () => {
+test('N13 邀请到访：两位 NPC 邀请态 chance 16 / 28；10000 次 14%~18% 记入 pendingVisitors', () => {
   const state = createInitialState({ seed: 1 });
-  assert.equal(inviteChance(state, 'ANT_FOREMAN'), 25);
-  assert.equal(inviteChance(state, 'APPRENTICE_PALADIN'), 25);
+  assert.equal(inviteChance(state, 'ANT_FOREMAN'), 16);
+  assert.equal(inviteChance(state, 'APPRENTICE_PALADIN'), 28);
 
   const rng = createRng(20261102);
   let hit = 0;
@@ -328,7 +328,7 @@ test('N13 邀请到访：两位 NPC chance 25；10000 次 23%~27% 记入 pending
     if (trial.pendingVisitors.length > 0) hit += 1;
     assert.deepEqual(trial.invites, []);
   }
-  assert.ok(hit / 10000 >= 0.23 && hit / 10000 <= 0.27, `到访 ${hit}`);
+  assert.ok(hit / 10000 >= 0.14 && hit / 10000 <= 0.18, `到访 ${hit}`);
 });
 
 test('N14 旧选项 FEED/VOUCHER/TALK/ESCAPE → UNKNOWN_OPTION，状态不变', () => {
@@ -403,7 +403,7 @@ test('N16 快照：蚁工头邀请→谈判不可用→战斗→资源→再遭�
   state.affectionExp.ANT_FOREMAN = 0;
 
   const invited = invite(state);
-  assert.equal(invited.chance, 25);
+  assert.equal(invited.chance, 16);
   assert.deepEqual(state.invites, [{ npcId: 'ANT_FOREMAN', day: 1 }]);
   assert.equal(negotiate(state, ['MAT_001']).reason, 'NOT_ACQUAINTED');
 
@@ -424,7 +424,14 @@ test('N16 快照：蚁工头邀请→谈判不可用→战斗→资源→再遭�
   assert.equal(state.explore, null);
 
   closeDay(state);
-  const advanced = nextDay(state);
+  const naturalEnabled = VISIT.NATURAL_ENABLED;
+  VISIT.NATURAL_ENABLED = false; // 夹具隔离：本用例只验证邀请掷点，关闭自然到访
+  let advanced;
+  try {
+    advanced = nextDay(state);
+  } finally {
+    VISIT.NATURAL_ENABLED = naturalEnabled;
+  }
   assert.equal(advanced.ok, true);
   assert.equal(state.day, 2);
   assert.deepEqual(state.invites, []);
@@ -485,14 +492,17 @@ test('N19 邀请到访：强制抽中，真实 nextDay → pendingVisitors 含 N
   closeDay(state);
   assert.equal(state.closed, true);
 
-  // nextDay 流程里只有 rollInvitations 调用 chancePercent（本用例打烊时池内无客人）
+  // nextDay 流程里 state.rng 只用于邀请掷点（自然到访走独立 visitRng）；本用例关闭自然到访以隔离
   const original = state.rng.chancePercent;
+  const naturalEnabled = VISIT.NATURAL_ENABLED;
   state.rng.chancePercent = () => true;
+  VISIT.NATURAL_ENABLED = false;
   let advanced;
   try {
     advanced = nextDay(state);
   } finally {
     state.rng.chancePercent = original;
+    VISIT.NATURAL_ENABLED = naturalEnabled;
   }
 
   assert.equal(advanced.ok, true);

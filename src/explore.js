@@ -9,7 +9,6 @@ import {
   ENCOUNTERS,
   EXPLORE,
   FIGHT,
-  INVITATION,
   ITEM_VALUES,
   LOST_FOUND,
   MATERIALS,
@@ -23,6 +22,7 @@ import {
   inventoryCount,
   removeInventory,
 } from './state.js';
+import { invitedVisitChance, rollInvitedVisitors } from './visit.js';
 
 function fail(reason) {
   return { ok: false, reason };
@@ -602,22 +602,14 @@ export function invite(state) {
   };
 }
 
-/** 只读：光临概率（P0 占位 = 基础 20 + 加成 5） */
+/** 只读：光临概率（㉒a 起走 VISIT 邀请态公式；界面预览仍用它） */
 export function inviteChance(state, npcId) {
-  return INVITATION.BASE_CHANCE_PCT + INVITATION.BONUS_CHANCE_PCT;
+  return invitedVisitChance(state, npcId);
 }
 
-/** 次日开盘：对每条邀请掷一次；成功记入 pendingVisitors */
-export function rollInvitations(state, rng) {
-  const events = [];
-  for (const invitation of state.invites) {
-    if (rng.chancePercent(inviteChance(state, invitation.npcId))) {
-      state.pendingVisitors.push(invitation.npcId);
-      events.push({ type: 'visitorInvited', npcId: invitation.npcId, day: state.day });
-    }
-  }
-  state.invites = [];
-  return events;
+/** 次日开盘：对每条邀请掷一次；成功记入 pendingVisitors（转发到 visit.js） */
+export function rollInvitations(state, rng = state.rng) {
+  return rollInvitedVisitors(state, rng);
 }
 
 /** 旧选项已被移除；保留入口，统一返回 UNKNOWN_OPTION */

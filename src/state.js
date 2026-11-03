@@ -17,6 +17,7 @@ import {
   POOL,
   REPUTATION,
   STARTING,
+  VISIT,
   VOUCHERS,
 } from '../config.js';
 import { createRng } from './rng.js';
@@ -81,6 +82,13 @@ export function createInitialState({ seed = 1 } = {}) {
     lostBagSeq: 0,               // 失物包唯一 id 的自增序号
     guestLastVisitDay: {},       // 熟客最近一次入池的营业日（失物代管判定用）
     vipTicketDay: null,          // （已停用：体验券不再给门票加成，字段保留待清）
+
+    // ---- 温泉馆吸引力与到访（A.20）----
+    houseLevel: 1,               // 馆等级（默认 1，本步不做玩家等级）
+    facilities: [],              // 设施 id 列表（本步固定为空，预留）
+    firstVisit: {},              // 每个 NPC 首次到访记录的日期（任何来源）
+    // 自然到访专用随机流：由种子派生、单独推进，不消耗也不影响 state.rng
+    visitRng: createRng((seed + VISIT.RNG_STREAM_OFFSET) >>> 0),
 
     // ---- 遭遇邀请（§4.4 v2）----
     invites: [],                 // [{ npcId, day }]，次日开盘掷到访

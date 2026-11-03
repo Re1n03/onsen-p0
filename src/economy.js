@@ -14,7 +14,7 @@
 import { CREDIT, POOL, REPUTATION, TAX, UNITS } from '../config.js';
 import { createPool } from './bath.js';
 import { processLostBagsOnNextDay } from './lostfound.js';
-import { rollInvitations } from './explore.js';
+import { rollVisitors } from './visit.js';
 import { createDailyCounters, grantDailyVoucher } from './state.js';
 
 /** 排污税（整数 G）：N 为已激活汤池数（§7） */
@@ -127,8 +127,8 @@ export function startNextDay(state) {
     events.push({ type: 'lostBagsSold', day: state.day, bags: soldBags });
   }
 
-  // 次日开盘：对每条邀请掷一次到访
-  events.push(...rollInvitations(state, state.rng));
+  // 次日开盘：清空 pendingVisitors，掷邀请 + 自然到访 + 首次保底（A.20）
+  events.push(...rollVisitors(state));
 
   grantDailyVoucher(state); // 每天开盘赠送 1 张，上限 3 张（§4.4）
 

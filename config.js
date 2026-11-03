@@ -420,6 +420,9 @@ export const ENCOUNTERS = {
     name: '红魔蚁工头',
     rank: 2,                  // 阶位
     startAffinityExp: 0,      // 起始好感经验
+    minHouseLevel: 1,         // 到访门槛：最低馆等级（A.20）
+    requiredFacility: null,   // 到访门槛：所需设施（A.20，本步空）
+    guaranteeDay: 5,          // 首次到访保底日（A.20）
     gift: 'PURE_ANT_ACID',    // 谈判成功回礼
     fightLoot: 'GEOTHERMAL_SHARD', // 战斗战利品
     attraction: {             // 物品吸引力（百分点）
@@ -434,6 +437,9 @@ export const ENCOUNTERS = {
     name: '见习圣骑士',
     rank: 1,
     startAffinityExp: 100,
+    minHouseLevel: 1,         // 到访门槛：最低馆等级（A.20）
+    requiredFacility: null,   // 到访门槛：所需设施（A.20，本步空）
+    guaranteeDay: null,       // 无首次保底（A.20）
     gift: 'HOLY_WATER_SAMPLE',
     fightLoot: 'HOLY_WATER_SAMPLE',
     attraction: {
@@ -462,7 +468,34 @@ export const FIGHT = {
 
 export const INVITATION = {
   BASE_CHANCE_PCT: 20,        // P0 占位：基础 20%
-  BONUS_CHANCE_PCT: 5,        // P0 占位：加成 5%
+  BONUS_CHANCE_PCT: 5,        // P0 占位：加成 5%（㉒a 起由 VISIT 公式取代，字段保留待清理）
+};
+
+// ============================================================
+// 11.5 温泉馆吸引力与到访（策划案 A.20，数值为占位）
+// ============================================================
+export const VISIT = {
+  BASE_CHANCE_PCT: 20,              // 到访基础概率 20%
+  MAX_CHANCE_PCT: 95,               // 到访概率上限 95
+  RESISTANCE_PER_RANK_PCT: 10,      // 抗性 = (阶位 − 1) × 10
+  AFFINITY_PER_HEART_PCT: 2,        // 每颗心 +2
+  AFFINITY_CAP_PCT: 20,             // 好感权重上限 +20
+  INVITE_BONUS_BASE: 1,             // 邀请加成 = 1 + floor(A / 10)
+  INVITE_BONUS_PER_ATTRACTION: 10,
+  INVITE_BONUS_MIN: 1,
+  INVITE_BONUS_MAX: 10,
+  NATURAL_ENABLED: true,            // 自然到访总开关（夹具可关，隔离旧用例）
+  RNG_STREAM_OFFSET: 0x9E3779B9,    // 独立随机流派生偏移（不引用 state.rng）
+  HOUSE_LEVEL_MIN: 1,
+  HOUSE_LEVEL_MAX: 5,
+  HOUSE_ATTRACTION_BY_LEVEL: {      // 馆等级吸引力（Lv1~Lv5）
+    1: 5,
+    2: 15,
+    3: 30,
+    4: 50,
+    5: 75,
+  },
+  FACILITY_ATTRACTION: {},          // 设施吸引力（本步固定 0，预留）
 };
 
 // ============================================================
