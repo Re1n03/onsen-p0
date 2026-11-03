@@ -51,6 +51,7 @@ const DEFAULTS = {
   returnSpec: null,
   policy: null,
   digestOnly: false,
+  full: false,
 };
 
 function parseArgs(argv) {
@@ -81,6 +82,7 @@ const cfg = {
   returnSpec: cli.return ?? null,
   policy: cli.policy ?? null,
   digestOnly: Boolean(cli['digest-only']),
+  full: Boolean(cli.full),
 };
 if (!Number.isInteger(cfg.runs) || cfg.runs <= 0) throw new Error('--runs 必须是正整数');
 if (!Number.isInteger(cfg.seed)) throw new Error('--seed 必须是整数');
@@ -106,14 +108,49 @@ function parseReturnSpec(text) {
   if (margin) return { type: 'm', value: Number(margin[1]), label: `m${margin[1]}` };
   const eatMargin = /^E(\d+)$/.exec(text);
   if (eatMargin) return { type: 'EAT', value: Number(eatMargin[1]), label: `E${eatMargin[1]}` };
+  const cap = /^C(\d+)\/(\d+)$/.exec(text);
+  if (cap) {
+    return {
+      type: 'CAP',
+      depth: Number(cap[1]),
+      margin: Number(cap[2]),
+      label: `C${cap[1]}/${cap[2]}`,
+    };
+  }
   throw new Error(`无法解析回店策略：${text}`);
 }
+
+/**
+ * 战斗费用：src 没有单独导出「战斗费用」，但 fight() 的返回值带 cost 字段。
+ * 这里用一次性 disposable 状态在每个深度调用真正的 fight()，读 result.cost 作为费用表，
+ * 不复制 FIGHT/ENCOUNTER 的规则。
+ */
+function measureFightCostByDepth() {
+  const costs = {};
+  for (let depth = 1; depth <= 12; depth += 1) {
+    const state = createInitialState({ seed: 1 });
+    state.gold = 1_000_000;
+    state.inventory = {};
+    const started = startExplore(state);
+    if (!started.ok) throw new Error(`战斗费用测量 startExplore 失败：${started.reason}`);
+    state.explore.depth = depth;
+    state.explore.mood = 1000;
+    state.explore.pendingEncounter = 'ANT_FOREMAN';
+    const result = fight(state);
+    if (!result.ok || !Number.isInteger(result.cost)) {
+      throw new Error(`战斗费用测量 fight 失败：${result.reason ?? result.cost}`);
+    }
+    costs[depth] = result.cost;
+  }
+  return costs;
+}
+const FIGHT_COST_BY_DEPTH = measureFightCostByDepth();
 
 function buildCombinations() {
   const explicit = cfg.loadout !== null || cfg.snacks !== null || cfg.eatBelow !== null
     || cfg.returnSpec !== null || cfg.policy !== null;
 
-  const levels = cfg.level === 'grid' ? [0, 1, 2, 3, 4] : [Number(cfg.level)];
+  const levels = cfg.level === 'grid' ? [2, 3, 4] : [Number(cfg.level)];
   for (const level of levels) {
     if (!Number.isInteger(level) || level < 0 || level > 4) throw new Error('--level 必须是 0~4');
   }
@@ -131,18 +168,16 @@ function buildCombinations() {
   }
 
   const combos = [];
-  const returnSpecs = [
-    { type: 'm', value: 4, label: 'm4' },   // 对照组：不吃小食
-    { type: 'EAT', value: 2, label: 'E2' }, // 续航型 m2
-    { type: 'EAT', value: 4, label: 'E4' }, // 续航型 m4
-    { type: 'D', value: 5, label: 'D5' },   // 固定深度对照
-  ];
+  const returnSpecs = [];
+  for (const margin of [2, 4, 6, 8]) {
+    returnSpecs.push({ type: 'CAP', depth: 9, margin, label: `C9/${margin}` });
+  }
   for (const level of levels) {
-    for (const loadout of ['L1']) {
-      for (const snacks of [0, 2, 4]) {
+    for (const loadout of ['L1', 'L2']) {
+      for (const snacks of [2, 4]) {
         for (const eatBelow of [2]) {
           for (const returnSpec of returnSpecs) {
-            for (const policy of ['NEG_SNK1', 'FIGHT']) {
+            for (const policy of ['FIGHT', 'NEG_SNK1', 'ADAPT_FIGHT', 'ADAPT_NEG']) {
               combos.push({ level, loadout, snacks, eatBelow, returnSpec, policy });
             }
           }
@@ -228,10 +263,17 @@ function simulateOnce(combo, seed) {
     freeSnacks: 0,        // 野餐篮/偷食后“免费”小食的剩余量
     fall: false,
     fallCause: null,
+    fallCategory: null,   // 'FIGHT' | 'ADVANCE' | 'RETURN'
+    fleeFall: false,      // 倒地是否由逃跑触发
     fallDepth: 0,
     maxDepth: 0,
     returnDepth: null,
     fleeDepth: null,
+    adaptEat: 0,          // 因雅兴不足改吃小食次数
+    adaptFlee: 0,         // 因雅兴不足改逃跑次数
+    forcedFight: 0,       // 被迫战斗次数
+    fleeMaterialCount: 0, // 逃跑消耗材料件数
+    fleeCost: 0,          // 逃跑消耗材料买价
     revenue: 0,
     ransom: 0,
     lostValue: 0,
@@ -276,6 +318,7 @@ function simulateOnce(combo, seed) {
     }
     tracker.fights += 1;
     if (result.fell) {
+      tracker.fallCategory = 'FIGHT';
       recordFall(result.fall);
       tracker.endReason = 'FALL';
       return;
@@ -290,10 +333,95 @@ function simulateOnce(combo, seed) {
 
   function buildOffer(policy) {
     if (policy === 'NEG') return [];
-    const want = policy === 'NEG_SNK1' ? 1 : 3;
+    const want = policy === 'NEG_SNK1' || policy === 'ADAPT_NEG' ? 1 : 3;
     const available = state.explore.lunchbox.SNK_001 ?? 0;
     const count = Math.min(want, available);
     return Array(count).fill('SNK_001');
+  }
+
+  function tryNegotiate() {
+    if (state.explore.negotiationTried) return;
+    if ((state.affectionExp[state.explore.pendingEncounter] ?? 0) <= 0) return; // 好感 0 直接跳过
+    const offer = buildOffer('ADAPT_NEG');
+    const result = negotiate(state, offer);
+    if (!result.ok) return;
+    tracker.negAttempts += 1;
+    for (const itemId of offer) consumeOfferItem(itemId);
+    if (result.success) {
+      tracker.negSuccess += 1;
+      if (result.needSwap) {
+        discardPending(state);
+        tracker.pendingDiscards += 1;
+      } else if (result.gift) {
+        tracker.loot[result.gift] = (tracker.loot[result.gift] ?? 0) + 1;
+      }
+    }
+  }
+
+  function currentFightCost() {
+    const depth = Math.min(state.explore.depth, 12);
+    return FIGHT_COST_BY_DEPTH[depth];
+  }
+
+  function canFightAndReturn() {
+    return state.explore.mood - currentFightCost() >= returnCost(state);
+  }
+
+  /** 雅兴不够付战斗时先吃小食，每次重新判断 */
+  function eatToAffordFight() {
+    let guard = 0;
+    while (state.explore
+      && !canFightAndReturn()
+      && (state.explore.lunchbox.SNK_001 ?? 0) > 0
+      && guard < 30) {
+      const result = eat(state);
+      if (!result.ok) break;
+      tracker.adaptEat += 1;
+      tracker.eats += 1;
+      consumeSnack();
+      guard += 1;
+    }
+  }
+
+  /** 背包里买价最低的材料逃跑；成功即本趟结束（可能倒地） */
+  function fleeCheapestMaterial() {
+    let bestId = null;
+    let bestPrice = Infinity;
+    for (const slot of state.explore.backpack) {
+      const profile = MATERIALS[slot.itemId];
+      if (!profile || slot.count <= 0) continue;
+      if (profile.buyPrice < bestPrice) {
+        bestPrice = profile.buyPrice;
+        bestId = slot.itemId;
+      }
+    }
+    if (!bestId) return false;
+    const result = flee(state, bestId);
+    if (!result.ok) return false;
+    tracker.adaptFlee += 1;
+    tracker.flees += 1;
+    tracker.fleeMaterialCount += 1;
+    tracker.fleeCost += bestPrice;
+    tracker.consumesCost += bestPrice;
+    if (result.fell) {
+      tracker.fallCategory = 'RETURN';
+      tracker.fleeFall = true;
+      recordFall(result.fall);
+      tracker.endReason = 'FALL';
+    } else {
+      tracker.endReason = 'FLEE_RETURN';
+    }
+    return true;
+  }
+
+  /** 自适应战斗：能安全战斗就战斗；否则吃小食；仍不行且能安全返程就逃跑；都不行就硬打 */
+  function adaptFight() {
+    if (canFightAndReturn()) { doFight(); return; }
+    eatToAffordFight();
+    if (canFightAndReturn()) { doFight(); return; }
+    if (state.explore.mood >= returnCost(state) && fleeCheapestMaterial()) return;
+    tracker.forcedFight += 1;
+    doFight();
   }
 
   function resolveEncounter() {
@@ -322,6 +450,17 @@ function simulateOnce(combo, seed) {
       return;
     }
 
+    if (policy === 'ADAPT_NEG') {
+      tryNegotiate();
+      if (state.explore && state.explore.pendingEncounter) adaptFight();
+      return;
+    }
+
+    if (policy === 'ADAPT_FIGHT') {
+      adaptFight();
+      return;
+    }
+
     if (policy === 'FIGHT') {
       doFight();
       return;
@@ -333,8 +472,12 @@ function simulateOnce(combo, seed) {
       const result = flee(state, materialId);
       if (!result.ok) { doFight(); return; }
       tracker.flees += 1;
+      tracker.fleeMaterialCount += 1;
+      tracker.fleeCost += MATERIALS[materialId].buyPrice;
       tracker.consumesCost += MATERIALS[materialId].buyPrice;
       if (result.fell) {
+        tracker.fallCategory = 'RETURN';
+        tracker.fleeFall = true;
         recordFall(result.fall);
         tracker.endReason = 'FALL';
       } else {
@@ -351,12 +494,12 @@ function simulateOnce(combo, seed) {
     tracker.maxDepth = Math.max(tracker.maxDepth, explore.depth);
 
     // 1) 回店判断
+    const marginLimit = combo.returnSpec.type === 'CAP'
+      ? combo.returnSpec.margin
+      : combo.returnSpec.value;
     const marginReached = () => Boolean(state.explore)
-      && state.explore.mood - returnCost(state) <= combo.returnSpec.value;
-
-    let shouldReturn;
-    if (combo.returnSpec.type === 'EAT') {
-      // 续航型：先按边距条件吃小食，吃到安全为止；没小食了才回店
+      && state.explore.mood - returnCost(state) <= marginLimit;
+    const eatToSafety = () => {
       let guard = 0;
       while (marginReached() && (state.explore.lunchbox.SNK_001 ?? 0) > 0 && guard < 30) {
         const eaten = eat(state);
@@ -365,6 +508,21 @@ function simulateOnce(combo, seed) {
         consumeSnack();
         guard += 1;
       }
+    };
+
+    let shouldReturn;
+    if (combo.returnSpec.type === 'CAP') {
+      // 先判深度上限；没到上限再按边距吃小食，吃不到小食才回店
+      if (explore.depth >= combo.returnSpec.depth) {
+        shouldReturn = true;
+      } else if (marginReached()) {
+        eatToSafety();
+        shouldReturn = marginReached();
+      } else {
+        shouldReturn = false;
+      }
+    } else if (combo.returnSpec.type === 'EAT') {
+      eatToSafety();
       shouldReturn = marginReached();
     } else if (combo.returnSpec.type === 'D') {
       shouldReturn = explore.depth >= combo.returnSpec.value;
@@ -375,6 +533,7 @@ function simulateOnce(combo, seed) {
       tracker.returnDepth = explore.depth;
       const result = returnHome(state);
       if (result.fell) {
+        tracker.fallCategory = 'RETURN';
         recordFall(result.fall);
         tracker.returnDepth = null;
         tracker.endReason = 'FALL';
@@ -407,6 +566,7 @@ function simulateOnce(combo, seed) {
     }
 
     if (result.fell) {
+      tracker.fallCategory = 'ADVANCE';
       recordFall(result.fall);
       tracker.endReason = 'FALL';
       break;
@@ -474,6 +634,8 @@ function simulateOnce(combo, seed) {
     error: tracker.error,
     fell: tracker.fall,
     fallCause: tracker.fallCause,
+    fallCategory: tracker.fallCategory,
+    fleeFall: tracker.fleeFall,
     fallDepth: tracker.fallDepth,
     maxDepth: tracker.maxDepth,
     returnDepth: tracker.returnDepth,
@@ -491,6 +653,11 @@ function simulateOnce(combo, seed) {
     flees: tracker.flees,
     eats: tracker.eats,
     pendingDiscards: tracker.pendingDiscards,
+    adaptEat: tracker.adaptEat,
+    adaptFlee: tracker.adaptFlee,
+    forcedFight: tracker.forcedFight,
+    fleeMaterialCount: tracker.fleeMaterialCount,
+    fleeCost: tracker.fleeCost,
   };
 }
 
@@ -512,6 +679,15 @@ function newAggregate() {
     ransomSum: 0,
     fleeReturns: 0,
     errors: 0,
+    fallByFight: 0,
+    fallByAdvance: 0,
+    fallByReturn: 0,
+    fleeFallFalls: 0,
+    adaptEatSum: 0,
+    adaptFleeSum: 0,
+    forcedFightSum: 0,
+    fleeMaterialSum: 0,
+    fleeCostSum: 0,
     encounters: 0,
     negAttempts: 0,
     negSuccess: 0,
@@ -533,6 +709,10 @@ function aggregateRun(agg, row) {
     agg.fallDepthSum += row.fallDepth;
     agg.fallDist[Math.min(row.fallDepth, 13)] += 1;
     agg.maxDepthDist[Math.min(row.maxDepth, 13)] += 1;
+    if (row.fallCategory === 'FIGHT') agg.fallByFight += 1;
+    else if (row.fallCategory === 'ADVANCE') agg.fallByAdvance += 1;
+    else if (row.fallCategory === 'RETURN') agg.fallByReturn += 1;
+    if (row.fleeFall) agg.fleeFallFalls += 1;
   }
   if (row.endReason === 'RETURN' && row.returnDepth !== null) {
     agg.returns += 1;
@@ -552,6 +732,11 @@ function aggregateRun(agg, row) {
   agg.flees += row.flees;
   agg.eats += row.eats;
   agg.pendingDiscards += row.pendingDiscards;
+  agg.adaptEatSum += row.adaptEat;
+  agg.adaptFleeSum += row.adaptFlee;
+  agg.forcedFightSum += row.forcedFight;
+  agg.fleeMaterialSum += row.fleeMaterialCount;
+  agg.fleeCostSum += row.fleeCost;
   for (let depth = 1; depth <= 12; depth += 1) {
     if (row.maxDepth >= depth) agg.survival[depth] += 1;
   }
@@ -605,7 +790,8 @@ for (const combo of combos) {
       comboId(combo), runIndex, row.endReason, row.fell ? 1 : 0, row.fallDepth, row.maxDepth,
       row.returnDepth, row.revenue, row.consumesCost, row.net, row.ransom,
       row.encounters, row.negAttempts, row.negSuccess, row.fights, row.flees, row.eats,
-      row.pendingDiscards,
+      row.pendingDiscards, row.fallCategory, row.fleeFall ? 1 : 0,
+      row.adaptEat, row.adaptFlee, row.forcedFight, row.fleeMaterialCount, row.fleeCost,
     ]));
     digest.update('\n');
   }
@@ -653,8 +839,11 @@ console.log('  - 净价值 = 战利品 sellItem 收入 − 离手装填物成本
 console.log('    「若赎回净价值」= 净价值 − lostBagRansom()，仅供参考。');
 console.log(`  - 倒地趟战利品收入：${cfg.fallIncome === 0 ? '记 0（--fall-income=0）' : '照常计入'}` +
   `；碎片=${cfg.fragments}；蚁工头好感经验=${cfg.antAffinity}；背包满固定 discardPending。`);
-console.log(`  - 雅兴等级：${levelLabels.join(' / ')}；装填只用 L1；小食 0/2/4 份；吃小食阈值 X=2；`);
-console.log('  - 回店策略：m4 = 边距（不吃小食对照组）；E2/E4 = 续航型 EAT_MARGIN（先按边距吃小食，吃不到才回店）；D5 = 固定深度对照。');
+console.log(`  - 雅兴等级：${levelLabels.join(' / ')}；装填 L1/L2；小食 2/4 份；吃小食阈值 X=2；`);
+console.log('  - 回店策略：EAT_CAP，深度上限固定 D9，余量 m=2/4/6/8（先判深度上限，再按雅兴−returnCost≤m 吃小食，吃不到才回店）。');
+console.log('  - 遭遇策略：FIGHT / NEG_SNK1（朴素对照），ADAPT_FIGHT / ADAPT_NEG（自适应：能安全战斗就战斗，否则吃小食，仍不行且能安全返程就逃跑，都不行才硬打）。');
+console.log(`  - 战斗费用表（调用 src 导出 fight() 读 result.cost 实测，深度1~12）：${JSON.stringify(FIGHT_COST_BY_DEPTH)}`);
+console.log('  - 表 7/8 的目标层：等级0=3~4、等级1=4~5、等级2=5~6、等级3=6、等级4=7~8。');
 console.log(`  - 各等级纯资源点安全深度（无小食、无事件、每层强制资源点，能成功回店的最深深度）：${safeDepthText}`);
 console.log('');
 console.log(`组合数=${combos.length} 每组趟数=${cfg.runs} 总趟数=${combos.length * cfg.runs} 运行时间=${elapsedSeconds.toFixed(2)}s`);
@@ -675,8 +864,12 @@ function summaryRow({ combo, agg }) {
     combo.loadout,
     String(combo.snacks),
     String(combo.eatBelow),
-    combo.returnSpec.type === 'D' ? '深度' : combo.returnSpec.type === 'EAT' ? '续航' : '边距',
-    combo.returnSpec.value === Infinity ? '∞' : String(combo.returnSpec.value),
+    combo.returnSpec.type === 'D' ? '深度'
+      : combo.returnSpec.type === 'EAT' ? '续航'
+        : combo.returnSpec.type === 'CAP' ? '续航上限' : '边距',
+    combo.returnSpec.type === 'CAP'
+      ? `D${combo.returnSpec.depth}/m${combo.returnSpec.margin}`
+      : combo.returnSpec.value === Infinity ? '∞' : String(combo.returnSpec.value),
     combo.policy,
     pct(fallRate),
     avgFallDepth === null ? '—' : avgFallDepth.toFixed(2),
@@ -702,25 +895,29 @@ const TABLE1_HEADERS = [
   '谈判尝试/趟', '谈判成功率', '战斗/趟', '逃跑/趟', '遭遇/趟', '吃/趟',
 ];
 
-console.log('=== 表 1：策略汇总 ===');
-printTable(TABLE1_HEADERS, results.map(summaryRow));
-console.log('');
+if (cfg.full) {
+  console.log('=== 表 1：策略汇总 ===');
+  printTable(TABLE1_HEADERS, results.map(summaryRow));
+  console.log('');
+}
 
 // ---------- 表 2：倒地率 15%~30% ----------
 const target = results.filter(({ agg }) => {
   const rate = agg.falls / agg.runs;
   return rate >= 0.15 && rate <= 0.30;
 });
-console.log('=== 表 2：倒地率 15%~30% 的策略组合 ===');
-if (target.length === 0) {
-  console.log('（无）');
-} else {
-  printTable(TABLE1_HEADERS, target
-    .slice()
-    .sort((a, b) => (a.agg.falls / a.agg.runs) - (b.agg.falls / b.agg.runs))
-    .map(summaryRow));
+if (cfg.full) {
+  console.log('=== 表 2：倒地率 15%~30% 的策略组合 ===');
+  if (target.length === 0) {
+    console.log('（无）');
+  } else {
+    printTable(TABLE1_HEADERS, target
+      .slice()
+      .sort((a, b) => (a.agg.falls / a.agg.runs) - (b.agg.falls / b.agg.runs))
+      .map(summaryRow));
+  }
+  console.log('');
 }
-console.log('');
 
 // ---------- 表 3：生存率曲线 ----------
 const survivalHeaders = ['ID', ...Array.from({ length: 12 }, (_, index) => `d${index + 1}`)];
@@ -728,9 +925,11 @@ const survivalRows = results.map(({ combo, agg }) => [
   comboId(combo),
   ...Array.from({ length: 12 }, (_, index) => pct(agg.survival[index + 1] / agg.runs)),
 ]);
-console.log('=== 表 3：到达各深度的生存率（S(d) = 曾到达深度 ≥ d 的趟数占比） ===');
-printTable(survivalHeaders, survivalRows);
-console.log('');
+if (cfg.full) {
+  console.log('=== 表 3：到达各深度的生存率（S(d) = 曾到达深度 ≥ d 的趟数占比） ===');
+  printTable(survivalHeaders, survivalRows);
+  console.log('');
+}
 
 // ---------- 表 4：倒地趟的最大深度分布（表 2 策略） ----------
 const depthDistHeaders = ['ID', ...Array.from({ length: 12 }, (_, index) => `第${index + 1}层`), '>12层'];
@@ -741,13 +940,15 @@ const maxDepthRows = target.map(({ combo, agg }) => [
     return pct(agg.maxDepthDist[index + 1] / agg.falls);
   }),
 ]);
-console.log('=== 表 4：倒地趟的最大深度分布（占该策略倒地总趟数的比例；口径同表 3 的 maxDepth） ===');
-if (maxDepthRows.length === 0) {
-  console.log('（无）');
-} else {
-  printTable(depthDistHeaders, maxDepthRows);
+if (cfg.full) {
+  console.log('=== 表 4：倒地趟的最大深度分布（占该策略倒地总趟数的比例；口径同表 3 的 maxDepth） ===');
+  if (maxDepthRows.length === 0) {
+    console.log('（无）');
+  } else {
+    printTable(depthDistHeaders, maxDepthRows);
+  }
+  console.log('');
 }
-console.log('');
 
 // ---------- 表 5：倒地发生层分布（表 2 策略） ----------
 const fallRows = target.map(({ combo, agg }) => [
@@ -757,34 +958,206 @@ const fallRows = target.map(({ combo, agg }) => [
     return pct(agg.fallDist[index + 1] / agg.falls);
   }),
 ]);
-console.log('=== 表 5：倒地发生层分布（占该策略倒地总趟数的比例） ===');
-console.log('    注：返程不足时倒地位置 = 深度 − 剩余雅兴，不是最大深度。');
-if (fallRows.length === 0) {
-  console.log('（无）');
-} else {
-  printTable(depthDistHeaders, fallRows);
+if (cfg.full) {
+  console.log('=== 表 5：倒地发生层分布（占该策略倒地总趟数的比例） ===');
+  console.log('    注：返程不足时倒地位置 = 深度 − 剩余雅兴，不是最大深度。');
+  if (fallRows.length === 0) {
+    console.log('（无）');
+  } else {
+    printTable(depthDistHeaders, fallRows);
+  }
+  console.log('');
 }
-console.log('');
 
 // ---------- 表 6：按等级的推荐区间 ----------
-console.log('=== 表 6：按等级的推荐区间（倒地率 15%~30% 中平均最大深度最大的前 3 行） ===');
+if (cfg.full) {
+  console.log('=== 表 6：按等级的推荐区间（倒地率 15%~30% 中平均最大深度最大的前 3 行） ===');
+  for (const level of levelLabels) {
+    const rows = target
+      .filter(({ combo }) => combo.level === level)
+      .slice()
+      .sort((a, b) => (b.agg.maxDepthSum / b.agg.runs) - (a.agg.maxDepthSum / a.agg.runs))
+      .slice(0, 3)
+      .map(({ combo, agg }) => [
+        comboId(combo),
+        pct(agg.falls / agg.runs),
+        (agg.maxDepthSum / agg.runs).toFixed(2),
+        money(agg.netSum / agg.runs),
+      ]);
+    console.log(`等级 ${level}：`);
+    if (rows.length === 0) {
+      console.log('（无）');
+    } else {
+      printTable(['ID', '倒地率', '平均最大深度', '平均净价值'], rows);
+    }
+  }
+  console.log('');
+}
+
+// ---------- 表 7：条件倒地率 ----------
+function conditionalFallRate(agg, depth) {
+  const reached = agg.survival[depth];
+  if (reached === 0) return null;
+  let fallsAtOrBeyond = 0;
+  for (let index = depth; index < agg.maxDepthDist.length; index += 1) {
+    fallsAtOrBeyond += agg.maxDepthDist[index];
+  }
+  return fallsAtOrBeyond / reached;
+}
+
+const conditionalHeaders = ['ID', ...Array.from({ length: 12 }, (_, index) => `d${index + 1}`)];
+const conditionalRows = results.map(({ combo, agg }) => [
+  comboId(combo),
+  ...Array.from({ length: 12 }, (_, index) => {
+    const rate = conditionalFallRate(agg, index + 1);
+    return rate === null ? '—' : pct(rate);
+  }),
+]);
+if (cfg.full) {
+  console.log('=== 表 7：条件倒地率 P(最终倒地 | 曾到达第 d 层) ===');
+  console.log('    定义：分子 = 最大深度恰为 d 的倒地趟数 + 最大深度大于 d 的倒地趟数（即 maxDepth ≥ d 的倒地趟）；');
+  console.log('          分母 = 曾到达第 d 层的趟数（maxDepth ≥ d 的趟数，= 表 3 的 S(d) × 总趟数）。');
+  printTable(conditionalHeaders, conditionalRows);
+  console.log('');
+}
+
+// ---------- 表 9~11：朴素 vs 自适应 ----------
+const TARGET_DEPTHS = {
+  0: [3, 4],
+  1: [4, 5],
+  2: [5, 6],
+  3: [6],
+  4: [7, 8],
+};
+
+function targetLayerRate(agg, level) {
+  const targets = TARGET_DEPTHS[level] ?? [];
+  const rates = targets
+    .map((depth) => conditionalFallRate(agg, depth))
+    .filter((rate) => rate !== null);
+  return rates.length === 0 ? null : rates.reduce((sum, rate) => sum + rate, 0) / rates.length;
+}
+
+function findResult(level, loadout, snacks, margin, policy) {
+  return results.find(({ combo }) => combo.level === level
+    && combo.loadout === loadout
+    && combo.snacks === snacks
+    && combo.returnSpec.type === 'CAP' && combo.returnSpec.depth === 9
+    && combo.returnSpec.margin === margin
+    && combo.policy === policy);
+}
+
+function compareMetrics(entry) {
+  if (!entry) return ['—', '—', '—', '—'];
+  const { agg, combo } = entry;
+  return [
+    pct(agg.falls / agg.runs),
+    pct(targetLayerRate(agg, combo.level)),
+    (agg.maxDepthSum / agg.runs).toFixed(2),
+    money(agg.netSum / agg.runs),
+  ];
+}
+
+console.log('=== 表 9：朴素 vs 自适应对比（每行同一 等级/装填/小食/余量） ===');
+const t9headers = [
+  '等级', '装填', '食', 'm',
+  'FIGHT 倒地率', 'FIGHT 目标层条件', 'FIGHT 平均最大深度', 'FIGHT 平均净价值',
+  'ADAPT_FIGHT 倒地率', 'ADAPT_FIGHT 目标层条件', 'ADAPT_FIGHT 平均最大深度', 'ADAPT_FIGHT 平均净价值',
+  'NEG_SNK1 倒地率', 'NEG_SNK1 目标层条件', 'NEG_SNK1 平均最大深度', 'NEG_SNK1 平均净价值',
+  'ADAPT_NEG 倒地率', 'ADAPT_NEG 目标层条件', 'ADAPT_NEG 平均最大深度', 'ADAPT_NEG 平均净价值',
+];
+const t9rows = [];
 for (const level of levelLabels) {
-  const rows = target
-    .filter(({ combo }) => combo.level === level)
-    .slice()
-    .sort((a, b) => (b.agg.maxDepthSum / b.agg.runs) - (a.agg.maxDepthSum / a.agg.runs))
-    .slice(0, 3)
-    .map(({ combo, agg }) => [
+  for (const loadout of ['L1', 'L2']) {
+    for (const snacks of [2, 4]) {
+      for (const margin of [2, 4, 6, 8]) {
+        const row = [String(level), loadout, String(snacks), String(margin)];
+        for (const policy of ['FIGHT', 'ADAPT_FIGHT', 'NEG_SNK1', 'ADAPT_NEG']) {
+          row.push(...compareMetrics(findResult(level, loadout, snacks, margin, policy)));
+        }
+        t9rows.push(row);
+      }
+    }
+  }
+}
+printTable(t9headers, t9rows);
+console.log('');
+
+// 代表行：等级 2/3/4、装填 L2、小食 4、余量 4/6/8
+function representativeEntries(policy) {
+  const list = [];
+  for (const level of levelLabels) {
+    for (const margin of [4, 6, 8]) {
+      const entry = findResult(level, 'L2', 4, margin, policy);
+      if (entry) list.push(entry);
+    }
+  }
+  return list;
+}
+
+const shareOfFalls = (part, agg) => (agg.falls === 0 ? '—' : pct(part / agg.falls));
+
+console.log('=== 表 10：倒地原因分布（a=战斗付费 / b=节点赶路或采集 / c=返程不足；c 中另记逃跑触发） ===');
+const t10headers = ['ID', '倒地率', 'a 战斗付费', 'b 节点', 'c 返程不足', 'c 中逃跑触发'];
+const t10rows = [];
+for (const policy of ['ADAPT_FIGHT', 'FIGHT']) {
+  for (const { combo, agg } of representativeEntries(policy)) {
+    const fleeShare = agg.fallByReturn === 0 ? '—' : pct(agg.fleeFallFalls / agg.fallByReturn);
+    t10rows.push([
       comboId(combo),
       pct(agg.falls / agg.runs),
-      (agg.maxDepthSum / agg.runs).toFixed(2),
-      money(agg.netSum / agg.runs),
+      shareOfFalls(agg.fallByFight, agg),
+      shareOfFalls(agg.fallByAdvance, agg),
+      shareOfFalls(agg.fallByReturn, agg),
+      fleeShare,
     ]);
-  console.log(`等级 ${level}：`);
+  }
+}
+printTable(t10headers, t10rows);
+console.log('');
+
+console.log('=== 表 11：自适应策略的使用情况（代表行同上） ===');
+const t11headers = ['ID', '改吃小食/趟', '改逃跑/趟', '被迫战斗/趟', '逃跑材料件数/趟', '逃跑材料买价/趟'];
+const t11rows = [];
+for (const policy of ['ADAPT_FIGHT', 'ADAPT_NEG']) {
+  for (const { combo, agg } of representativeEntries(policy)) {
+    t11rows.push([
+      comboId(combo),
+      (agg.adaptEatSum / agg.runs).toFixed(2),
+      (agg.adaptFleeSum / agg.runs).toFixed(2),
+      (agg.forcedFightSum / agg.runs).toFixed(2),
+      (agg.fleeMaterialSum / agg.runs).toFixed(2),
+      (agg.fleeCostSum / agg.runs).toFixed(2),
+    ]);
+  }
+}
+printTable(t11headers, t11rows);
+console.log('');
+
+// ---------- 表 8：目标层条件倒地率 ----------
+console.log('=== 表 8：目标层条件倒地率（15%~30%，按平均净价值降序，各等级前 5） ===');
+console.log('    注：目标层条件倒地率 = 目标深度区间内各层条件倒地率的算术平均（等级3只有一层）。');
+for (const level of levelLabels) {
+  const targets = TARGET_DEPTHS[level] ?? [];
+  const rows = results
+    .filter(({ combo }) => combo.level === level)
+    .map(({ combo, agg }) => ({ combo, agg, targetRate: targetLayerRate(agg, level) }))
+    .filter((entry) => entry.targetRate !== null && entry.targetRate >= 0.15 && entry.targetRate <= 0.30)
+    .sort((a, b) => (b.agg.netSum / b.agg.runs) - (a.agg.netSum / a.agg.runs))
+    .slice(0, 5)
+    .map(({ combo, agg, targetRate }) => [
+      comboId(combo),
+      `${targets.join('~')}层`,
+      pct(targetRate),
+      money(agg.netSum / agg.runs),
+      pct(agg.falls / agg.runs),
+      (agg.maxDepthSum / agg.runs).toFixed(2),
+    ]);
+  console.log(`等级 ${level}（目标层 ${targets.join('~')}）：`);
   if (rows.length === 0) {
     console.log('（无）');
   } else {
-    printTable(['ID', '倒地率', '平均最大深度', '平均净价值'], rows);
+    printTable(['ID', '目标层', '目标层条件倒地率', '平均净价值', '总倒地率', '平均最大深度'], rows);
   }
 }
 console.log('');
