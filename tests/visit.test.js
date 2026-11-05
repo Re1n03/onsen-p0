@@ -16,6 +16,7 @@ import {
   inviteBonusOf,
   invitedVisitChance,
   naturalVisitChance,
+  rollVisitors,
 } from '../src/visit.js';
 
 /** 打烊后走真实 nextDay（第 1 天 → 第 2 天，依次类推） */
@@ -195,9 +196,10 @@ test('N31 自然到访抽样：1万种子走真实 nextDay，圣骑士命中 25%
   assert.ok(hit / total >= 0.25 && hit / total <= 0.29, `圣骑士到访 ${hit}`);
 });
 
-test('N32 被邀请只掷一次：1万种子命中 14%~18%，次日 pendingVisitors 清空', () => {
+test('N32 被邀请只掷一次：1万种子命中 14%~18%；命中种子次日 pendingVisitors 清空', () => {
   const total = 10000;
   let hit = 0;
+  const hitStates = [];
   withNaturalEnabled(false, () => {
     for (let index = 0; index < total; index += 1) {
       const state = createInitialState({ seed: index + 1 });
@@ -205,15 +207,17 @@ test('N32 被邀请只掷一次：1万种子命中 14%~18%，次日 pendingVisit
       openNextDay(state); // day2
       const arrived = state.pendingVisitors.filter((npcId) => npcId === 'ANT_FOREMAN').length;
       assert.ok(arrived <= 1);
-      if (arrived === 1) hit += 1;
+      if (arrived === 1) {
+        hit += 1;
+        hitStates.push(state);
+      }
     }
     assert.ok(hit / total >= 0.14 && hit / total <= 0.18, `受邀到访 ${hit}`);
-
-    const cleared = createInitialState({ seed: 1 });
-    cleared.invites = [{ npcId: 'ANT_FOREMAN', day: 1 }];
-    openNextDay(cleared); // day2
-    openNextDay(cleared); // day3
-    assert.deepEqual(cleared.pendingVisitors, []);
+    assert.ok(hitStates.length > 0, `受邀命中种子数 ${hitStates.length}`);
+    for (const state of hitStates) {
+      openNextDay(state); // day3
+      assert.deepEqual(state.pendingVisitors, []);
+    }
   });
 });
 
@@ -309,4 +313,28 @@ test('N36 保底用 >=：第5天关闭自然不到访，第6天打开后补保�
   } finally {
     restore();
   }
+});
+
+test('N37 第1天不掷点：直接 rollVisitors（day=1、有邀请、两流强制 true）→ 事件空、pending 空、邀请保持、两流种子不变', () => {
+  const state = createInitialState({ seed: 1 });
+  state.day = 1;
+  state.invites = [{ npcId: 'ANT_FOREMAN', day: 1 }];
+  const rngBefore = state.rng.getSeed();
+  const visitBefore = state.visitRng.getSeed();
+
+  const restoreRng = forceChance(state.rng, true);
+  const restoreVisit = forceChance(state.visitRng, true);
+  let events;
+  try {
+    events = rollVisitors(state);
+  } finally {
+    restoreRng();
+    restoreVisit();
+  }
+
+  assert.deepEqual(events, []);
+  assert.deepEqual(state.pendingVisitors, []);
+  assert.deepEqual(state.invites, [{ npcId: 'ANT_FOREMAN', day: 1 }]);
+  assert.equal(state.rng.getSeed(), rngBefore);
+  assert.equal(state.visitRng.getSeed(), visitBefore);
 });
