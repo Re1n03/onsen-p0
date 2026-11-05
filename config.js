@@ -101,6 +101,7 @@ export const GUEST = {
   SATIETY_MAX: 100,
   SATIETY_INITIAL_MIN: 20,               // 饱腹初始随机 20~80 点（§3.6）
   SATIETY_INITIAL_MAX: 80,
+  SATIETY_VISITOR_INITIAL: 50,           // 遭遇 NPC 档案（ENCOUNTERS）入座时的固定饱腹初值，不消耗随机数（㉒b-2 到访者入场沿用）
   SATIETY_DROP: 3,                       // 每 10 秒 −3 点（§3.6）
   SATIETY_DROP_INTERVAL_SECONDS: 10,
 
@@ -138,6 +139,37 @@ export const RACES = {
       extremeAbove: 550,       // 极限区 >55.0℃（§3.3）
     },
   },
+  ANT: {
+    name: '蚁族',
+    faction: 'NEUTRAL',        // 中立（§2.1）；必须写英文 key：声望与结算都按这个 key 查表
+    tempZone: {
+      favorite: [280, 400],    // 喜爱区 28.0~40.0℃（策划 ㉒b 定稿）
+      tolerant: [200, 460],    // 耐受区 20.0~46.0℃（策划 ㉒b 定稿）
+      extremeBelow: 100,       // 极限区 <10.0℃（策划 ㉒b 定稿）
+      extremeAbove: 520,       // 极限区 >52.0℃（策划 ㉒b 定稿）
+    },
+  },
+  CLERGY: {
+    name: '圣职人员',
+    faction: 'ORDER',          // 秩序（与人族同属秩序，§2.1）
+    clergy: true,              // 「圣职」标记：冲突惩罚按种族判定，不按阵营判定
+    tempZone: {
+      favorite: [380, 450],    // 喜爱区 38.0~45.0℃（策划 ㉒b 定稿）
+      tolerant: [320, 480],    // 耐受区 32.0~48.0℃（策划 ㉒b 定稿）
+      extremeBelow: 180,       // 极限区 <18.0℃（策划 ㉒b 定稿）
+      extremeAbove: 520,       // 极限区 >52.0℃（策划 ㉒b 定稿）
+    },
+  },
+};
+
+// 个人区间宽度上限（万分比，10000 = 100%）：宽度 = 上界 − 下界（含端点，不额外 +1）
+// 按 NPC 阶位查表；阶位 ≥5 一律 40%。校验在测试期进行，运行期不抛错。
+export const TEMP_ZONE_WIDTH_LIMIT_BP_BY_RANK = {
+  1: 10000,   // 阶位 1：100%
+  2: 8500,    // 阶位 2：85%
+  3: 7000,    // 阶位 3：70%
+  4: 5500,    // 阶位 4：55%
+  5: 4000,    // 阶位 5 及以上：40%
 };
 
 // ============================================================
@@ -155,7 +187,7 @@ export const COMFORT_TICK = {
   EXTREME_PENALTY_PER_SEC: 200,     // 极限区每秒额外 −2.00（§3.7）
   UNCOMFORTABLE_PENALTY_PER_SEC: 50, // 不适区每秒 −0.50，计入 Loss、会被 Dirty_Mult 放大（§3.3/§3.7 新规则）
   CONFLICT_PENALTY_PER_SEC: 100,    // 圣职与魔物同池每秒 −1.00（§3.7）
-                                    // P0 没有圣职客人，此值不会触发，仅为公式项保留
+                                    // ㉒b-1 起真实生效：只有 RACES 带 clergy 标记的种族才算「圣职」
   CLEAN_TIERS: [                    // 洁净度分档，从上到下取第一条 clean ≥ minClean（§3.7 表）
     { minClean: 600, cleanFactorPct: 100, dirtyMultPct: 100 },  // ≥60.0：1.00× / 1.00×
     { minClean: 300, cleanFactorPct: 60,  dirtyMultPct: 150 },  // 30.0~59.9：0.60× / 1.50×
@@ -418,11 +450,16 @@ export const FRAGMENTS = {
 export const ENCOUNTERS = {
   ANT_FOREMAN: {
     name: '红魔蚁工头',
+    race: 'ANT',              // 种族：蚁族（㉒b-1）
     rank: 2,                  // 阶位
     startAffinityExp: 0,      // 起始好感经验
     minHouseLevel: 1,         // 到访门槛：最低馆等级（A.20）
     requiredFacility: null,   // 到访门槛：所需设施（A.20，本步空）
     guaranteeDay: 5,          // 首次到访保底日（A.20）
+    tempZone: {               // 个人区间（只覆盖喜爱/耐受；极限区仍取种族）
+      favorite: [300, 400],   // 喜爱区 30.0~40.0℃（策划 ㉒b 定稿）
+      tolerant: [220, 440],   // 耐受区 22.0~44.0℃（策划 ㉒b 定稿）
+    },
     gift: 'PURE_ANT_ACID',    // 谈判成功回礼
     fightLoot: 'GEOTHERMAL_SHARD', // 战斗战利品
     attraction: {             // 物品吸引力（百分点）
@@ -435,11 +472,16 @@ export const ENCOUNTERS = {
   },
   APPRENTICE_PALADIN: {
     name: '见习圣骑士',
+    race: 'CLERGY',           // 种族：圣职人员（㉒b-1）
     rank: 1,
     startAffinityExp: 100,
     minHouseLevel: 1,         // 到访门槛：最低馆等级（A.20）
     requiredFacility: null,   // 到访门槛：所需设施（A.20，本步空）
     guaranteeDay: null,       // 无首次保底（A.20）
+    tempZone: {               // 个人区间（只覆盖喜爱/耐受；极限区仍取种族）
+      favorite: [400, 450],   // 喜爱区 40.0~45.0℃（策划 ㉒b 定稿）
+      tolerant: [340, 480],   // 耐受区 34.0~48.0℃（策划 ㉒b 定稿）
+    },
     gift: 'HOLY_WATER_SAMPLE',
     fightLoot: 'HOLY_WATER_SAMPLE',
     attraction: {

@@ -11,6 +11,7 @@
 
 import {
   AFFINITY,
+  ENCOUNTERS,
   FRAGMENTS,
   GUEST,
   GUESTS,
@@ -108,18 +109,24 @@ export function getHeart(affectionExp) {
 
 /**
  * 按配置生成一位要入池的客人。
+ * 查表顺序：先 GUESTS（三位熟客），再 ENCOUNTERS（遭遇 NPC 档案，㉒b-1 最小档案）；
+ * 两处都没有仍然 throw。
+ * 熟客的饱腹初值随机（沿用旧随机序列）；遭遇 NPC 用固定初值，不消耗任何随机数。
  * 好感/声望不放在客人身上，按 guestId 存在 state 里。
  */
 export function createGuest(state, guestId) {
   const profile = GUESTS[guestId];
-  if (!profile) throw new Error(`未知客人：${guestId}`);
+  const npc = profile ? null : ENCOUNTERS[guestId];
+  if (!profile && !npc) throw new Error(`未知客人：${guestId}`);
 
   return {
     guestId,
-    name: profile.name,
-    race: profile.race,
+    name: profile ? profile.name : npc.name,
+    race: profile ? profile.race : npc.race,
     comfort: GUEST.COMFORT_INITIAL,
-    satiety: state.rng.nextInt(GUEST.SATIETY_INITIAL_MIN, GUEST.SATIETY_INITIAL_MAX),
+    satiety: profile
+      ? state.rng.nextInt(GUEST.SATIETY_INITIAL_MIN, GUEST.SATIETY_INITIAL_MAX)
+      : GUEST.SATIETY_VISITOR_INITIAL,
     secondsInPool: 0,
     seatedAt: null,
     orderOpen: false,   // 是否正在亮「点单气泡」
