@@ -377,6 +377,27 @@ test('T26 配置校验：正常配置 []；反例 1 条 OVER_WIDTH、1 条 NOT_S
   assert.deepEqual(validateTempZones(notSubset, RACES), [
     { npcId: 'APPRENTICE_PALADIN', zone: 'favorite', code: 'NOT_SUBSET' },
   ]);
+
+  // A 组：宽度恰好等于上限（蚁工头阶位 2 → 8500；221 × 10000 = 260 × 8500 = 2210000）
+  // 用来钉住「> 」与「>= 」的差异：改成 >= 会误报 OVER_WIDTH
+  const exactlyAtLimit = structuredClone(ENCOUNTERS);
+  exactlyAtLimit.ANT_FOREMAN.tempZone.tolerant = [200, 421];
+  assert.deepEqual(validateTempZones(exactlyAtLimit, RACES), []);
+
+  // B 组：比上限多 1 个单位（222 × 10000 = 2220000 > 2210000），子集仍成立 → 只有 OVER_WIDTH
+  const oneOverLimit = structuredClone(ENCOUNTERS);
+  oneOverLimit.ANT_FOREMAN.tempZone.tolerant = [200, 422];
+  assert.deepEqual(validateTempZones(oneOverLimit, RACES), [
+    { npcId: 'ANT_FOREMAN', zone: 'tolerant', code: 'OVER_WIDTH' },
+  ]);
+
+  // C 组：上界超出种族区间（340 ≥ 320 成立，490 > 480）；宽度 150 < 160 不超限
+  // 用来钉住子集判定的上界检查：去掉上界检查会返回 []
+  const upperOut = structuredClone(ENCOUNTERS);
+  upperOut.APPRENTICE_PALADIN.tempZone.tolerant = [340, 490];
+  assert.deepEqual(validateTempZones(upperOut, RACES), [
+    { npcId: 'APPRENTICE_PALADIN', zone: 'tolerant', code: 'NOT_SUBSET' },
+  ]);
 });
 
 test('T27 真实 tick：圣职 × 魔物同池每秒 −1.00（5 秒 2250/500，第 7 秒亡灵怒离）', () => {
