@@ -19,6 +19,7 @@ import {
   POOL,
   RACES,
   GUESTS,
+  ENCOUNTERS,
   MATERIALS,
   SNACKS,
 } from '../config.js';
@@ -286,9 +287,22 @@ function renderControls() {
   }
 }
 
-function tempBandHtml(race, temp) {
+/**
+ * 该客人座位卡上的温度色带分段（纯函数，供测试直接断言）：
+ * 遭遇 NPC 的 guestId 就是 npcId，会按个人区间画；熟客回退到种族区间。
+ */
+export function bandSegmentsFor(guest) {
+  return tempBandSegments(guest.race, guest.guestId);
+}
+
+/** 候位显示名：熟客 → 遭遇 NPC → 原始 id（纯函数，供测试直接断言） */
+export function queueGuestName(guestId) {
+  return GUESTS[guestId]?.name ?? ENCOUNTERS[guestId]?.name ?? guestId;
+}
+
+function tempBandHtml(guest, temp) {
   const span = TEMP.MAX - TEMP.MIN;
-  const segments = tempBandSegments(race).map((segment) => {
+  const segments = bandSegmentsFor(guest).map((segment) => {
     const left = ((segment.from - TEMP.MIN) / span) * UNITS.PERCENT;
     const width = ((segment.to - segment.from) / span) * UNITS.PERCENT;
     return `<i class="seg zone-${segment.zone}" style="left:${left}%;width:${width}%"></i>`;
@@ -343,7 +357,7 @@ function renderSeats() {
       return;
     }
 
-    const zone = getTempZone(guest.race, state.pool.temp);
+    const zone = getTempZone(guest.race, state.pool.temp, guest.guestId);
     const heart = getHeart(state.affectionExp[guest.guestId] ?? 0);
     seat.card.className = 'seat';
     seat.nameText.textContent = guest.name;
@@ -352,7 +366,7 @@ function renderSeats() {
     seat.barFill.style.width = `${toPercent(guest.comfort, GUEST.COMFORT_MAX)}%`;
     seat.comfortLine.textContent =
       `满意度 ${fmtPoint(guest.comfort, UNITS.COMFORT_PER_POINT)} / ${fmtPoint(GUEST.COMFORT_MAX, UNITS.COMFORT_PER_POINT)} · ${ZONE_LABEL[zone]}`;
-    seat.band.innerHTML = tempBandHtml(guest.race, state.pool.temp);
+    seat.band.innerHTML = tempBandHtml(guest, state.pool.temp);
 
     if (guest.orderOpen) {
       seat.bubble.dataset.id = guest.guestId;
@@ -364,7 +378,7 @@ function renderSeats() {
 }
 
 function renderSide() {
-  const queueNames = state.queue.map((entry) => GUESTS[entry.guestId]?.name ?? entry.guestId);
+  const queueNames = state.queue.map((entry) => queueGuestName(entry.guestId));
   byId('queue').textContent =
     `候位 ${state.queue.length} / ${POOL.QUEUE_LIMIT} 人${queueNames.length ? `（${queueNames.join('、')}）` : ''}`;
 

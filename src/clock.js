@@ -17,6 +17,7 @@
 
 import {
   AFFINITY,
+  ENCOUNTERS,
   GUEST,
   GUESTS,
   POOL,
@@ -86,8 +87,51 @@ export function enqueueGuest(state, guestId, now = state.time) {
   return { type: 'guestQueued', at: now, guestId };
 }
 
-/** 本拍到客：有座直接入座，没座进候位；换水期间只排队；没人可来则跳过 */
+/** 到访者队首（只读，不抽随机数）；没有则返回 null */
+function pendingVisitorHead(state) {
+  return state.pendingVisitors.length > 0 ? state.pendingVisitors[0] : null;
+}
+
+/** 入场成功（入座或入队）后按 npcId 删除该条到访者 */
+function removePendingVisitor(state, npcId) {
+  const index = state.pendingVisitors.findIndex((entry) => entry.npcId === npcId);
+  if (index >= 0) state.pendingVisitors.splice(index, 1);
+}
+
+/**
+ * 到访者占用本拍到客名额：判定全部先于随机数（本函数不抽任何随机数）。
+ * 有座 → seatGuest；无座但候位未满 → enqueueGuest；否则推迟、保留队首。
+ * 入座/入队成功后才会从 pendingVisitors 删除该条。
+ */
+function enterVisitor(state, entry, now, frozen) {
+  const seatIndex = frozen ? -1 : state.seats.indexOf(null);
+
+  if (seatIndex >= 0) {
+    const seated = seatGuest(state, seatIndex, entry.npcId, now);
+    removePendingVisitor(state, entry.npcId);
+    return [seated, {
+      type: 'visitorSeated', at: now, npcId: entry.npcId, seat: seatIndex, source: entry.source,
+    }];
+  }
+
+  if (state.queue.length < POOL.QUEUE_LIMIT) {
+    const queued = enqueueGuest(state, entry.npcId, now);
+    removePendingVisitor(state, entry.npcId);
+    return [queued, {
+      type: 'visitorQueued', at: now, npcId: entry.npcId, source: entry.source,
+    }];
+  }
+
+  return [{
+    type: 'visitorDeferred', at: now, npcId: entry.npcId, source: entry.source, reason: 'QUEUE_FULL',
+  }];
+}
+
+/** 本拍到客：到访者优先占名额；没有到访者时才走普通随机客人 */
 function arrive(state, now, frozen) {
+  const visitor = pendingVisitorHead(state);
+  if (visitor) return enterVisitor(state, visitor, now, frozen);
+
   const guestId = pickGuestId(state);
   if (!guestId) return [{ type: 'arrivalSkipped', at: now }];
 
@@ -399,6 +443,12 @@ export function tick(state) {
     if (now - entry.enqueuedAt >= POOL.PATIENCE_SECONDS) {
       state.queue.splice(i, 1);
       events.push({ type: 'queueTimeout', at: now, guestId: entry.guestId });
+      // 到访者白来：只额外发事件，不改好感/声望/金币（与普通客人同规则）
+      if (ENCOUNTERS[entry.guestId]) {
+        events.push({
+          type: 'visitorLost', at: now, npcId: entry.guestId, reason: 'QUEUE_TIMEOUT',
+        });
+      }
     }
   }
 

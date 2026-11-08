@@ -91,7 +91,9 @@ export function meetsGate(state, npcId) {
 }
 
 function recordArrival(state, npcId, source, events) {
-  if (!state.pendingVisitors.includes(npcId)) state.pendingVisitors.push(npcId);
+  if (!state.pendingVisitors.some((entry) => entry.npcId === npcId)) {
+    state.pendingVisitors.push({ npcId, source, day: state.day });
+  }
   if (state.firstVisit[npcId] === undefined) state.firstVisit[npcId] = state.day;
   events.push({ type: 'visitorArrives', npcId, day: state.day, source });
 }
@@ -105,12 +107,10 @@ export function rollInvitedVisitors(state, rng = state.rng) {
   const events = [];
   for (const invitation of state.invites) {
     const { npcId } = invitation;
-    if (state.pendingVisitors.includes(npcId)) continue;
+    if (state.pendingVisitors.some((entry) => entry.npcId === npcId)) continue;
     if (!meetsGate(state, npcId)) continue;
     if (rng.chancePercent(invitedVisitChance(state, npcId))) {
       recordArrival(state, npcId, 'invite', events);
-      // 兼容旧用例 N19：保留旧 visitorInvited 事件 （㉒b 清理）
-      events.push({ type: 'visitorInvited', npcId, day: state.day });
     }
   }
   state.invites = [];
@@ -132,7 +132,7 @@ export function rollVisitors(state) {
   if (!VISIT.NATURAL_ENABLED) return events;
 
   for (const npcId of Object.keys(ENCOUNTERS)) {
-    if (state.pendingVisitors.includes(npcId)) continue;
+    if (state.pendingVisitors.some((entry) => entry.npcId === npcId)) continue;
     const npc = ENCOUNTERS[npcId];
     const guaranteeDay = npc.guaranteeDay;
     const guaranteeDue = guaranteeDay !== null

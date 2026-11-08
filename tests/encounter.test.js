@@ -507,12 +507,18 @@ test('N19 邀请到访：强制抽中，真实 nextDay → pendingVisitors 含 N
 
   assert.equal(advanced.ok, true);
   assert.equal(state.day, 2);
-  assert.deepEqual(state.pendingVisitors, ['ANT_FOREMAN']);
+  assert.deepEqual(state.pendingVisitors, [
+    { npcId: 'ANT_FOREMAN', source: 'invite', day: 2 },
+  ]);
   assert.deepEqual(state.invites, []);
-  const visitorEvents = advanced.events.filter((event) => event.type === 'visitorInvited');
+  const visitorEvents = advanced.events.filter((event) => event.type === 'visitorArrives');
   assert.equal(visitorEvents.length, 1);
   assert.equal(visitorEvents[0].npcId, 'ANT_FOREMAN');
   assert.equal(visitorEvents[0].day, 2);
+  assert.equal(
+    advanced.events.filter((event) => event.type === 'visitorInvited').length,
+    0,
+  );
 });
 
 test('N20 谈判成功且背包满：pending 圣水样品；回店/逃跑 NEED_SWAP；放弃后回店成功', () => {

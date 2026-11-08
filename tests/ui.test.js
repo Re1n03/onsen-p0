@@ -150,3 +150,22 @@ test('点击已占用投料槽 → 弹出「这个槽位还在生效中」', () 
   assert.equal(elements.get('toast').hidden, false);
   assert.equal(timeoutDelays.at(-1), 2000);
 });
+
+// ============================================================
+// U1 遭遇 NPC 客人的候位名称与座位色带（纯函数）
+// ============================================================
+test('U1 候位名称与色带：遭遇 NPC 按 ENCOUNTERS 名称与个人区间', () => {
+  assert.equal(ui.queueGuestName('ANT_FOREMAN'), '红魔蚁工头');
+  assert.equal(ui.queueGuestName('GUEST_BONE_KING_GUARD'), '骨王近卫');
+  assert.equal(ui.queueGuestName('NOT_A_GUEST'), 'NOT_A_GUEST');
+
+  assert.deepEqual(ui.bandSegmentsFor({ race: 'CLERGY', guestId: 'APPRENTICE_PALADIN' }), [
+    { zone: 'EXTREME', from: 0, to: 180 },
+    { zone: 'UNCOMFORTABLE', from: 180, to: 340 },
+    { zone: 'TOLERANT', from: 340, to: 400 },
+    { zone: 'FAVORITE', from: 400, to: 450 },
+    { zone: 'TOLERANT', from: 450, to: 480 },
+    { zone: 'UNCOMFORTABLE', from: 480, to: 520 },
+    { zone: 'EXTREME', from: 520, to: 1000 },
+  ]);
+});

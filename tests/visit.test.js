@@ -111,7 +111,10 @@ test('N28 门槛：蚁工头 minHouseLevel=2、馆等级1 → 不掷点；馆等
     } finally {
       restoreBlocked();
     }
-    assert.equal(blocked.pendingVisitors.includes('ANT_FOREMAN'), false);
+    assert.equal(
+      blocked.pendingVisitors.some((entry) => entry.npcId === 'ANT_FOREMAN'),
+      false,
+    );
     assert.equal(
       blockedAdvanced.events.filter((event) => event.type === 'visitorArrives'
         && event.npcId === 'ANT_FOREMAN').length,
@@ -126,7 +129,10 @@ test('N28 门槛：蚁工头 minHouseLevel=2、馆等级1 → 不掷点；馆等
     } finally {
       restoreAllowed();
     }
-    assert.equal(allowed.pendingVisitors.includes('ANT_FOREMAN'), true);
+    assert.equal(
+      allowed.pendingVisitors.some((entry) => entry.npcId === 'ANT_FOREMAN'),
+      true,
+    );
     assert.equal(allowed.firstVisit.ANT_FOREMAN, 2);
   } finally {
     ENCOUNTERS.ANT_FOREMAN.minHouseLevel = originalMin;
@@ -154,7 +160,9 @@ test('N29 保底：第4天不触发；第5天强制失败仍到访，source guar
     restoreDay5();
   }
   assert.equal(state.day, 5);
-  assert.deepEqual(state.pendingVisitors, ['ANT_FOREMAN']);
+  assert.deepEqual(state.pendingVisitors, [
+    { npcId: 'ANT_FOREMAN', source: 'guaranteed', day: 5 },
+  ]);
   assert.equal(state.firstVisit.ANT_FOREMAN, 5);
   const arrivals = advanced.events.filter((event) => event.type === 'visitorArrives');
   assert.deepEqual(arrivals, [
@@ -191,7 +199,7 @@ test('N31 自然到访抽样：1万种子走真实 nextDay，圣骑士命中 25%
   for (let index = 0; index < total; index += 1) {
     const state = createInitialState({ seed: index + 1 });
     openNextDay(state); // day2
-    if (state.pendingVisitors.includes('APPRENTICE_PALADIN')) hit += 1;
+    if (state.pendingVisitors.some((entry) => entry.npcId === 'APPRENTICE_PALADIN')) hit += 1;
   }
   assert.ok(hit / total >= 0.25 && hit / total <= 0.29, `圣骑士到访 ${hit}`);
 });
@@ -205,7 +213,7 @@ test('N32 被邀请只掷一次：1万种子命中 14%~18%；命中种子次日 
       const state = createInitialState({ seed: index + 1 });
       state.invites = [{ npcId: 'ANT_FOREMAN', day: 1 }];
       openNextDay(state); // day2
-      const arrived = state.pendingVisitors.filter((npcId) => npcId === 'ANT_FOREMAN').length;
+      const arrived = state.pendingVisitors.filter((entry) => entry.npcId === 'ANT_FOREMAN').length;
       assert.ok(arrived <= 1);
       if (arrived === 1) {
         hit += 1;
@@ -254,8 +262,13 @@ test('N34 开关：关闭自然到访时未邀请者不到访，被邀请的仍�
       restoreRng();
       restoreVisitRng();
     }
-    assert.deepEqual(state.pendingVisitors, ['ANT_FOREMAN']);
-    assert.equal(state.pendingVisitors.includes('APPRENTICE_PALADIN'), false);
+    assert.deepEqual(state.pendingVisitors, [
+      { npcId: 'ANT_FOREMAN', source: 'invite', day: 2 },
+    ]);
+    assert.equal(
+      state.pendingVisitors.some((entry) => entry.npcId === 'APPRENTICE_PALADIN'),
+      false,
+    );
 
     openNextDay(state); // day3
     assert.deepEqual(state.pendingVisitors, []);
@@ -276,7 +289,9 @@ test('N35 保底忽略门槛：蚁工头 minHouseLevel=2、馆等级1，第5天�
     } finally {
       restore();
     }
-    assert.deepEqual(state.pendingVisitors, ['ANT_FOREMAN']);
+    assert.deepEqual(state.pendingVisitors, [
+      { npcId: 'ANT_FOREMAN', source: 'guaranteed', day: 5 },
+    ]);
     assert.equal(state.firstVisit.ANT_FOREMAN, 5);
     const arrivals = advanced.events.filter((event) => event.type === 'visitorArrives');
     assert.deepEqual(arrivals, [
@@ -304,7 +319,9 @@ test('N36 保底用 >=：第5天关闭自然不到访，第6天打开后补保�
       advanced = openNextDay(state); // day6：>= 保底补触发
     });
     assert.equal(state.day, 6);
-    assert.deepEqual(state.pendingVisitors, ['ANT_FOREMAN']);
+    assert.deepEqual(state.pendingVisitors, [
+      { npcId: 'ANT_FOREMAN', source: 'guaranteed', day: 6 },
+    ]);
     assert.equal(state.firstVisit.ANT_FOREMAN, 6);
     const arrivals = advanced.events.filter((event) => event.type === 'visitorArrives');
     assert.deepEqual(arrivals, [
