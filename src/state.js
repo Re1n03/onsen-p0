@@ -76,8 +76,14 @@ export function createInitialState({ seed = 1 } = {}) {
     daily: createDailyCounters(),
     lastReport: null,
 
+    // ---- 玩家等级（㉓）----
+    playerLevel: 1,
+    playerExp: 0,                // 当前等级内已累计经验
+    expLog: [],                  // 经验事件流：expGained / playerLevelUp（不进日报）
+
     // ---- 采风（§4.1、§5.1）：null 表示当天还没出发 ----
     explore: null,
+    lastExploreDay: null,        // 最近一次成功出发的营业日（每天只能出发一次）
     moodLevel: 0,                // 雅兴上限等级（0~4）
     lostBags: [],                // 倒地生成的失物包列表（可同时存在多个，各自计时）
     lostBagSeq: 0,               // 失物包唯一 id 的自增序号

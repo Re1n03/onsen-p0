@@ -20,6 +20,7 @@ import {
   ENCOUNTERS,
   GUEST,
   GUESTS,
+  PLAYER_EXP,
   POOL,
   RACES,
   REPUTATION,
@@ -40,6 +41,7 @@ import {
   rollFragmentDrop,
 } from './state.js';
 import { isAngry, onGuestLeave, settleAngryGold, settleBreakdown, stepSecond, tipMultPctFor } from './bath.js';
+import { grantExp, guestExpOf, visitorBonusOf } from './player.js';
 import { settleDay } from './economy.js';
 
 // ============================================================
@@ -297,6 +299,8 @@ function departGuest(state, seatIndex, mode, now) {
     addGold(state, gold);
     state.daily.ticketIncome += gold;
     events.push({ type: 'guestAngryLeft', at: now, guestId: guest.guestId, gold });
+    // 怒离不给经验（ANGRY = 0；amount 0 不产生事件、不消耗随机数）
+    grantExp(state, PLAYER_EXP.ANGRY, 'guest', now);
     return events;
   }
 
@@ -335,6 +339,14 @@ function departGuest(state, seatIndex, mode, now) {
     gainAffinity(state, guest.guestId, AFFINITY.GAIN_HIGH_COMFORT_LEAVE);
     gainReputation(state, faction, REPUTATION.GAIN_HIGH_COMFORT_LEAVE);
   }
+
+  // 玩家经验：满意度分档 + 到访者加成（只写 state.playerExp/expLog，不进日报）
+  grantExp(
+    state,
+    guestExpOf(guest.comfort) + visitorBonusOf(guest.guestId),
+    'guest',
+    now,
+  );
 
   return events;
 }

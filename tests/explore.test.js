@@ -409,3 +409,52 @@ test('X15 采风期间打烊：拒绝 EXPLORING，状态不变', () => {
   assert.equal(state.explore.mood, 16);
 });
 
+// ============================================================
+// P20 / P21：每天只能出发一次（㉓ 第 0 步）
+// ============================================================
+test('P20 同一天第二次出发被拒绝：ALREADY_EXPLORED，不抽随机数、不入账', () => {
+  const state = createInitialState({ seed: 1 });
+  state.day = 4;
+  assert.equal(startExplore(state).ok, true);
+  assert.equal(state.lastExploreDay, 4);
+  assert.equal(returnHome(state).ok, true);
+
+  const seedBefore = state.rng.getSeed();
+  const expBefore = state.playerExp;
+  const second = startExplore(state);
+
+  assert.deepEqual(second, { ok: false, reason: 'ALREADY_EXPLORED' });
+  assert.equal(state.rng.getSeed(), seedBefore);
+  assert.equal(state.playerExp, expBefore);
+  assert.equal(state.lastExploreDay, 4);
+});
+
+test('P21 被拒绝的出发不占名额，且次日恢复', async () => {
+  const { VISIT } = await import('../config.js');
+  const state = createInitialState({ seed: 1 });
+  state.day = 4;
+
+  // 既有拒绝：打烊中不能出发（不消耗随机数、不校验装填）
+  state.closed = true;
+  assert.equal(startExplore(state).reason, 'DAY_CLOSED');
+  assert.equal(state.lastExploreDay, null);
+
+  state.closed = false;
+  assert.equal(startExplore(state).ok, true);
+  assert.equal(state.lastExploreDay, 4);
+  assert.equal(returnHome(state).ok, true);
+  assert.equal(closeDayAction(state).ok, true);
+
+  const original = VISIT.NATURAL_ENABLED;
+  VISIT.NATURAL_ENABLED = false;
+  try {
+    startNextDay(state);
+  } finally {
+    VISIT.NATURAL_ENABLED = original;
+  }
+
+  assert.equal(state.day, 5);
+  assert.equal(startExplore(state).ok, true);
+  assert.equal(state.lastExploreDay, 5);
+});
+

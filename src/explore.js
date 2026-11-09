@@ -13,6 +13,7 @@ import {
   LOST_FOUND,
   MATERIALS,
   NEGOTIATION,
+  PLAYER_EXP,
   SNACKS,
 } from '../config.js';
 import {
@@ -22,6 +23,7 @@ import {
   inventoryCount,
   removeInventory,
 } from './state.js';
+import { grantExp } from './player.js';
 import { invitedVisitChance, rollInvitedVisitors } from './visit.js';
 
 function fail(reason) {
@@ -114,6 +116,9 @@ export function startExplore(state, loadout = {}) {
     if (inventoryCount(state, itemId) < count) return fail('NO_ITEM');
   }
 
+  // 每天只能出发一次：放在所有既有拒绝检查之后、扣库存与抽随机数之前
+  if (state.lastExploreDay === state.day) return fail('ALREADY_EXPLORED');
+
   for (const [itemId, count] of [...Object.entries(normalized.lunchbox), ...Object.entries(normalized.backpack)]) {
     if (count > 0) removeInventory(state, itemId, count);
   }
@@ -146,6 +151,7 @@ export function startExplore(state, loadout = {}) {
     pendingPickup: null,
   };
 
+  state.lastExploreDay = state.day;
   return { ok: true, mood: moodMax, depth: 0, campfireDepths: [...campfireDepths] };
 }
 
@@ -376,12 +382,17 @@ export function advance(state) {
 
   const nextDepth = explore.depth + EXPLORE.DEPTH_PER_NODE;
   if (explore.campfireDepths.includes(nextDepth)) {
-    return settleNode(state, 'CAMPFIRE');
+    const result = settleNode(state, 'CAMPFIRE');
+    // 到达即入账：倒地（fell）也是 ok:true，倒地所在层的深度经验照给
+    if (result.ok) grantExp(state, PLAYER_EXP.ADVANCE_PER_DEPTH, 'explore_advance', null);
+    return result;
   }
 
   const nodeType = drawNodeType(state.rng);
   const eventType = nodeType === 'EVENT' ? drawEventType(state.rng) : undefined;
-  return settleNode(state, nodeType, eventType);
+  const result = settleNode(state, nodeType, eventType);
+  if (result.ok) grantExp(state, PLAYER_EXP.ADVANCE_PER_DEPTH, 'explore_advance', null);
+  return result;
 }
 
 /** 吃小食：从野餐盒扣；雅兴 +3，不超上限 */
@@ -508,6 +519,7 @@ export function negotiate(state, offer) {
 
   if (!success) {
     explore.negotiationTried = true;
+    grantExp(state, PLAYER_EXP.NEGOTIATE_FAIL, 'explore_negotiate', null);
     return { ok: true, success: false, chance, mood: explore.mood, depth: explore.depth };
   }
 
@@ -517,6 +529,7 @@ export function negotiate(state, offer) {
     needSwap = !picked.ok && picked.reason === 'NEED_SWAP';
   }
   gainAffinity(state, npcId, NEGOTIATION.AFFINITY_GAIN);
+  grantExp(state, PLAYER_EXP.NEGOTIATE_SUCCESS, 'explore_negotiate', null);
   endEncounter(explore);
 
   return {
@@ -553,6 +566,7 @@ export function fight(state) {
     0,
     (state.affectionExp[npcId] ?? 0) - NEGOTIATION.AFFINITY_LOSS,
   );
+  grantExp(state, PLAYER_EXP.FIGHT, 'explore_fight', null);
   endEncounter(explore);
 
   return {
@@ -575,6 +589,8 @@ export function flee(state, materialId) {
   }
 
   removeBackpackItem(explore.backpack, materialId, 1);
+  // 逃跑的 1 点先入账：返程即使倒地也保留（返程本身不再给经验）
+  grantExp(state, PLAYER_EXP.FLEE, 'explore_flee', null);
   const result = finishAdventureReturn(state);
   return { ...result, fled: true };
 }
