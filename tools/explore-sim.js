@@ -194,12 +194,15 @@ function buildCombinations() {
 function applyLevel(state, level) {
   if (level <= 0) return;
   const startingGold = state.gold;
+  const startingPlayerLevel = state.playerLevel;
   state.gold = 1_000_000; // 仅用于支付升级费，升级后立即还原
+  state.playerLevel = 30; // 仅用于通过雅兴升级的玩家等级门槛，升级后立即还原（不动 playerExp）
   for (let index = 0; index < level; index += 1) {
     const result = upgradeMood(state);
     if (!result.ok) throw new Error(`upgradeMood 失败：${result.reason}`);
   }
   state.gold = startingGold;
+  state.playerLevel = startingPlayerLevel;
 }
 
 function loadoutInventory(loadout, snacks) {

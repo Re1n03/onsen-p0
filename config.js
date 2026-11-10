@@ -377,6 +377,7 @@ export const EXPLORE = {
   // ---- 体力系统（§4.1 v2）----
   MOOD_LEVELS: [16, 19, 22, 25, 28],   // 等级 0~4 的雅兴上限
   UPGRADE_COSTS: [2500, 6000, 11000, 18000], // 0→1、1→2、2→3、3→4
+  UPGRADE_MIN_PLAYER_LEVEL: [3, 8, 13, 18], // 占位值：各档升级所需玩家等级，下标与 UPGRADE_COSTS 相同（0→1、1→2、2→3、3→4）
   LUNCHBOX_CAPACITY: 4,                // 野餐盒最多 4 份小食
 
   STEP_COST_BY_DEPTH: [                // 赶路：抵达第 d 层扣

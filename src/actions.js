@@ -198,7 +198,7 @@ export function redeemLostBag(state, bagId) {
 
 /**
  * 升级雅兴上限：等级 0~4，费用 2500/6000/11000/18000。
- * 拒绝原因：EXPLORING / MAX_LEVEL / NOT_ENOUGH_GOLD
+ * 拒绝原因（按检查顺序）：EXPLORING / MAX_LEVEL / NOT_ENOUGH_GOLD / PLAYER_LEVEL_TOO_LOW
  */
 export function upgradeMood(state) {
   if (state.explore) return fail('EXPLORING');
@@ -209,6 +209,9 @@ export function upgradeMood(state) {
 
   const cost = EXPLORE.UPGRADE_COSTS[level];
   if (state.gold < cost) return fail('NOT_ENOUGH_GOLD');
+
+  const minLevel = EXPLORE.UPGRADE_MIN_PLAYER_LEVEL[level];
+  if ((state.playerLevel ?? 1) < minLevel) return fail('PLAYER_LEVEL_TOO_LOW');
 
   state.gold -= cost;
   state.moodLevel = level + 1;
