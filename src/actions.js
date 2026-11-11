@@ -197,7 +197,7 @@ export function redeemLostBag(state, bagId) {
 // 因此实现在 economy.startNextDay（helper 在 state.grantDailyVoucher）。
 
 /**
- * 升级雅兴上限：等级 0~4，费用 2500/6000/11000/18000。
+ * 升级雅兴上限：等级 0~4，费用 1600/3400/6000/9000。
  * 拒绝原因（按检查顺序）：EXPLORING / MAX_LEVEL / NOT_ENOUGH_GOLD / PLAYER_LEVEL_TOO_LOW
  */
 export function upgradeMood(state) {

@@ -3,7 +3,7 @@
  *
  * 期望值全部写死字面数字，不由 config / 被测代码计算。
  * 门槛占位值：0→1 / 1→2 / 2→3 / 3→4 = 玩家等级 3 / 8 / 13 / 18
- * 价格：2500 / 6000 / 11000 / 18000
+ * 价格：1600 / 3400 / 6000 / 9000
  */
 
 import { test } from 'node:test';
@@ -24,10 +24,10 @@ function stateAtLevel30() {
 // Q1 价格逐档
 // ============================================================
 const PRICE_CASES = [
-  { level: 0, price: 2500, short: 2499, moodMax: 19 },
-  { level: 1, price: 6000, short: 5999, moodMax: 22 },
-  { level: 2, price: 11000, short: 10999, moodMax: 25 },
-  { level: 3, price: 18000, short: 17999, moodMax: 28 },
+  { level: 0, price: 1600, short: 1599, moodMax: 19 },
+  { level: 1, price: 3400, short: 3399, moodMax: 22 },
+  { level: 2, price: 6000, short: 5999, moodMax: 25 },
+  { level: 3, price: 9000, short: 8999, moodMax: 28 },
 ];
 
 test('Q1 价格逐档：恰好价格成功且金币归 0；价格−1 返回 NOT_ENOUGH_GOLD', () => {
@@ -61,10 +61,10 @@ test('Q1 价格逐档：恰好价格成功且金币归 0；价格−1 返回 NOT
 // Q2 门槛逐档
 // ============================================================
 const THRESHOLD_CASES = [
-  { level: 0, below: 2, at: 3, price: 2500, moodMax: 19, goldAfter: 997500 },
-  { level: 1, below: 7, at: 8, price: 6000, moodMax: 22, goldAfter: 994000 },
-  { level: 2, below: 12, at: 13, price: 11000, moodMax: 25, goldAfter: 989000 },
-  { level: 3, below: 17, at: 18, price: 18000, moodMax: 28, goldAfter: 982000 },
+  { level: 0, below: 2, at: 3, price: 1600, moodMax: 19, goldAfter: 998400 },
+  { level: 1, below: 7, at: 8, price: 3400, moodMax: 22, goldAfter: 996600 },
+  { level: 2, below: 12, at: 13, price: 6000, moodMax: 25, goldAfter: 994000 },
+  { level: 3, below: 17, at: 18, price: 9000, moodMax: 28, goldAfter: 991000 },
 ];
 
 test('Q2 门槛逐档：2/7/12/17 拒绝；3/8/13/18 成功且 moodMax 19/22/25/28', () => {
@@ -132,7 +132,7 @@ test('Q3 拒绝顺序：EXPLORING → MAX_LEVEL → NOT_ENOUGH_GOLD → PLAYER_L
   // 金币不足 + 等级不足 → NOT_ENOUGH_GOLD
   const poor = createInitialState({ seed: 1 });
   poor.moodLevel = 0;
-  poor.gold = 2499;
+  poor.gold = 1599;
   poor.playerLevel = 2;
   assert.equal(upgradeMood(poor).reason, 'NOT_ENOUGH_GOLD');
 
@@ -183,7 +183,7 @@ test('Q4 被拒绝不动状态、不抽随机数；成功升级也不动经验',
 
   const poor = withExp(createInitialState({ seed: 1 }));
   poor.moodLevel = 0;
-  poor.gold = 2499;
+  poor.gold = 1599;
   poor.playerLevel = 2;
   cases.push(['NOT_ENOUGH_GOLD', poor]);
 
@@ -206,7 +206,7 @@ test('Q4 被拒绝不动状态、不抽随机数；成功升级也不动经验',
   // 成功升级：经验与经验日志不动
   const success = withExp(stateAtLevel30());
   success.moodLevel = 0;
-  success.gold = 2500;
+  success.gold = 1600;
   const beforeSuccess = snapshot(success);
   const result = upgradeMood(success);
   assert.equal(result.ok, true);

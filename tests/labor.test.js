@@ -198,14 +198,14 @@ test('L9 回店与倒地：野餐盒剩余回库存；倒地只丢背包 80%', (
   assert.equal(fell.inventory.MAT_001, 3); // 6 −4 + 保留 1
 });
 
-test('L10 升级：3000 → 500、上限19；再升 NOT_ENOUGH_GOLD；满级 MAX_LEVEL；采风 EXPLORING；等级1 出发 19', () => {
+test('L10 升级：3000 → 1400、上限19；再升 NOT_ENOUGH_GOLD；满级 MAX_LEVEL；采风 EXPLORING；等级1 出发 19', () => {
   const state = createInitialState({ seed: 1 });
   state.gold = 3000;
   state.playerLevel = 3;
 
   const first = upgradeMood(state);
   assert.equal(first.ok, true);
-  assert.equal(state.gold, 500);
+  assert.equal(state.gold, 1400);
   assert.equal(first.moodMax, 19);
 
   const goldBefore = state.gold;
