@@ -11,11 +11,11 @@
  * 不读写 DOM、不推进秒。
  */
 
-import { CREDIT, POOL, REPUTATION, TAX, UNITS } from '../config.js';
+import { CREDIT, REPUTATION, TAX, UNITS } from '../config.js';
 import { createPool } from './bath.js';
 import { processLostBagsOnNextDay } from './lostfound.js';
 import { rollVisitors } from './visit.js';
-import { createDailyCounters, grantDailyVoucher } from './state.js';
+import { createDailyCounters, grantDailyVoucher, rollArrivalInterval } from './state.js';
 
 /** 排污税（整数 G）：N 为已激活汤池数（§7） */
 export function taxGold(state) {
@@ -109,10 +109,7 @@ export function startNextDay(state) {
   state.waterChange = null;
   state.drinking = null;   // 新的一天不必继续昨天的喝水计时；感冒若未治愈仍然保留
   state.pool = createPool(); // 水温 25.0℃、洁净度 100.0
-  state.nextArrivalAt = state.rng.nextInt(
-    POOL.ARRIVAL_INTERVAL_MIN_SECONDS,
-    POOL.ARRIVAL_INTERVAL_MAX_SECONDS,
-  );
+  state.nextArrivalAt = rollArrivalInterval(state);
 
   // 倒地次日感冒：当天倒地标记在新的一天生效；同一天多次倒地也只算一次
   if (state.coldPending) {

@@ -38,6 +38,7 @@ import {
   gainReputation,
   getHeart,
   removeInventory,
+  rollArrivalInterval,
   rollFragmentDrop,
 } from './state.js';
 import { isAngry, onGuestLeave, settleAngryGold, settleBreakdown, stepSecond, tipMultPctFor } from './bath.js';
@@ -405,10 +406,7 @@ export function tick(state) {
   if (now >= state.nextArrivalAt) {
     state.arrivals.push(now);
     events.push(...arrive(state, now, frozen));
-    state.nextArrivalAt = now + state.rng.nextInt(
-      POOL.ARRIVAL_INTERVAL_MIN_SECONDS,
-      POOL.ARRIVAL_INTERVAL_MAX_SECONDS,
-    );
+    state.nextArrivalAt = now + rollArrivalInterval(state);
   }
 
   if (frozen) {

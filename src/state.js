@@ -15,6 +15,7 @@ import {
   FRAGMENTS,
   GUEST,
   GUESTS,
+  HOUSE_LEVELS,
   POOL,
   REPUTATION,
   STARTING,
@@ -36,6 +37,20 @@ export function createDailyCounters() {
 }
 
 /**
+ * 按馆等级抽下一次到客间隔（秒）。
+ *  - level = state.houseLevel ?? 1；查 HOUSE_LEVELS，缺少该行直接 throw RangeError，不静默回退；
+ *  - 校验在抽随机数之前，未知馆等级不消耗随机数；
+ *  - 抽取方式与旧实现完全一致：state.rng.nextInt(min, max)，每次 1 抽；
+ *  - 馆等级变化只影响之后的抽取，不会重排已经抽好的 state.nextArrivalAt。
+ */
+export function rollArrivalInterval(state) {
+  const level = state.houseLevel ?? 1;
+  const row = HOUSE_LEVELS[level];
+  if (!row) throw new RangeError('UNKNOWN_HOUSE_LEVEL');
+  return state.rng.nextInt(row.arrivalMinSeconds, row.arrivalMaxSeconds);
+}
+
+/**
  * 建立开局状态。
  * @param {{ seed?: number }} [options] 随机数种子：同一种子 → 同一天完全可复现
  */
@@ -43,7 +58,7 @@ export function createInitialState({ seed = 1 } = {}) {
   const rng = createRng(seed);
   const seatCount = POOL.COUNT * POOL.SEATS; // P0 = 1 池 × 2 席
 
-  return {
+  const state = {
     seed,
     rng,
 
@@ -70,7 +85,7 @@ export function createInitialState({ seed = 1 } = {}) {
     tray: [],           // 托盘小食 [{ placedAt, guestId, eatAt, recycleAt }]
     waterChange: null,  // { remainingSeconds }
 
-    nextArrivalAt: rng.nextInt(POOL.ARRIVAL_INTERVAL_MIN_SECONDS, POOL.ARRIVAL_INTERVAL_MAX_SECONDS),
+    nextArrivalAt: 0,   // 占位：对象建好后按馆等级抽（rollArrivalInterval 需要读 state.houseLevel）
     arrivals: [],       // 每次「到客判定」发生的秒数（含无人可来/被拒），用于核对节奏
 
     daily: createDailyCounters(),
@@ -106,6 +121,9 @@ export function createInitialState({ seed = 1 } = {}) {
     coldPending: false,          // 当天倒地，次日开盘生效
     drinking: null,              // 饮热水：{ remainingSeconds }
   };
+
+  state.nextArrivalAt = rollArrivalInterval(state); // 此时 state.houseLevel 已为 1
+  return state;
 }
 
 /** 好感经验 → 心数（0~10） */

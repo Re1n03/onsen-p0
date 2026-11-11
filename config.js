@@ -87,6 +87,19 @@ export const POOL = {
 };
 
 // ============================================================
+// 3.1 馆等级的到客间隔（占位值，㉔b 参数化）
+//     座位固定 2；馆等级只影响这里的到客间隔与 VISIT 的吸引力
+//     POOL.ARRIVAL_INTERVAL_* 保留但不再被读取（待清理）
+// ============================================================
+export const HOUSE_LEVELS = {
+  1: { arrivalMinSeconds: 25, arrivalMaxSeconds: 40 },
+  2: { arrivalMinSeconds: 22, arrivalMaxSeconds: 35 },
+  3: { arrivalMinSeconds: 20, arrivalMaxSeconds: 32 },
+  4: { arrivalMinSeconds: 18, arrivalMaxSeconds: 30 },
+  5: { arrivalMinSeconds: 16, arrivalMaxSeconds: 26 },
+};
+
+// ============================================================
 // 4. 客人状态（§3.6）
 //    满意度单位 0.01、洁净度单位 0.1、饱腹单位 1 点
 // ============================================================
