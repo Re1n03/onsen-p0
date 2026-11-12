@@ -507,6 +507,77 @@ export const ENCOUNTERS = {
       MAT_003: -25,
     },
   },
+
+  // ---- 新增到访者（只作到访者；名字与 id 为占位，后期统一替换）----
+  // gift / fightLoot / attraction 为 P1 才用的占位值；本步不进遭遇表（EXPLORE.ENCOUNTER_CHANCE_PCT 不动），
+  // 因此 P0 的谈判/战斗/邀请路径不会触及这些字段。
+  ANT_R3: {
+    name: '蚁族3阶',          // 占位名
+    race: 'ANT',              // 种族：蚁族
+    rank: 3,
+    startAffinityExp: 0,
+    minHouseLevel: 3,         // 到访门槛：馆 3
+    requiredFacility: null,
+    guaranteeDay: null,       // 无首次保底
+    tempZone: {
+      favorite: [330, 400],   // 喜爱区 33.0~40.0℃
+      tolerant: [250, 430],   // 耐受区 25.0~43.0℃
+    },
+    gift: 'PURE_ANT_ACID',          // P1 占位（本步不接线）
+    fightLoot: 'GEOTHERMAL_SHARD',  // P1 占位（本步不接线）
+    attraction: {                   // P1 占位（本步不接线）
+      SNK_001: 22,
+      FRAGMENT: 16,
+      MAT_002: 12,
+      MAT_001: 5,
+      MAT_003: 0,
+    },
+  },
+  CLERGY_R4: {
+    name: '圣职4阶',          // 占位名
+    race: 'CLERGY',           // 种族：圣职人员
+    rank: 4,
+    startAffinityExp: 0,
+    minHouseLevel: 4,         // 到访门槛：馆 4
+    requiredFacility: null,
+    guaranteeDay: null,       // 无首次保底
+    tempZone: {
+      favorite: [410, 448],   // 喜爱区 41.0~44.8℃
+      tolerant: [380, 465],   // 耐受区 38.0~46.5℃
+    },
+    gift: 'HOLY_WATER_SAMPLE',      // P1 占位（本步不接线）
+    fightLoot: 'HOLY_WATER_SAMPLE', // P1 占位（本步不接线）
+    attraction: {                   // P1 占位（本步不接线）
+      SNK_001: 18,
+      HOLY_WATER_SAMPLE: 30,
+      FRAGMENT: 16,
+      MAT_001: 5,
+      MAT_002: 5,
+      MAT_003: -20,
+    },
+  },
+  ANT_R5: {
+    name: '蚁族5阶',          // 占位名
+    race: 'ANT',              // 种族：蚁族
+    rank: 5,
+    startAffinityExp: 0,
+    minHouseLevel: 5,         // 到访门槛：馆 5
+    requiredFacility: null,
+    guaranteeDay: null,       // 无首次保底
+    tempZone: {
+      favorite: [350, 394],   // 喜爱区 35.0~39.4℃
+      tolerant: [320, 420],   // 耐受区 32.0~42.0℃
+    },
+    gift: 'PURE_ANT_ACID',          // P1 占位（本步不接线）
+    fightLoot: 'GEOTHERMAL_SHARD',  // P1 占位（本步不接线）
+    attraction: {                   // P1 占位（本步不接线）
+      SNK_001: 26,
+      FRAGMENT: 18,
+      MAT_002: 10,
+      MAT_001: 5,
+      MAT_003: 0,
+    },
+  },
 };
 
 export const NEGOTIATION = {
