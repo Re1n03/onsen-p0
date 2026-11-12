@@ -14,6 +14,7 @@
 import {
   AFFINITY,
   EXPLORE,
+  HOUSE_BUILD,
   ITEM_VALUES,
   LOST_FOUND,
   MATERIALS,
@@ -25,6 +26,7 @@ import { addInventory, inventoryCount, removeInventory } from './state.js';
 import { injectMaterial } from './bath.js';
 import { closeDay as closeDayClock, putSnackOnTray, tryChangeWater } from './clock.js';
 import { lostBagRansom } from './lostfound.js';
+import { unlockedHouseLevel } from './player.js';
 import { startNextDay } from './economy.js';
 
 function fail(reason) {
@@ -220,6 +222,46 @@ export function upgradeMood(state) {
     level: state.moodLevel,
     moodMax: EXPLORE.MOOD_LEVELS[state.moodLevel],
     gold: state.gold,
+  };
+}
+
+/**
+ * 馆建造：馆等级 +1（1→2 … 4→5）。
+ * 资格只读 unlockedHouseLevel（PLAYER_LEVEL.UNLOCK_HOUSE_LEVEL 单一来源）。
+ * 拒绝原因（按检查顺序）：
+ *   EXPLORING / BUSINESS_STARTED / MAX_LEVEL / PLAYER_LEVEL_TOO_LOW /
+ *   NOT_ENOUGH_MATERIALS / NOT_ENOUGH_GOLD
+ * 所有拒绝检查都在改状态、抽随机数之前；成功不重排 nextArrivalAt、不入经验、不写日报。
+ * 允许开盘前（closed=false 且 time=0）与打烊后（closed=true）执行；
+ * closed=false 且 time≠0（含 480 秒未 closeDay）视为营业中。
+ */
+export function buildHouse(state) {
+  if (state.explore) return fail('EXPLORING');
+  if (state.closed === false && state.time !== 0) return fail('BUSINESS_STARTED');
+
+  const level = state.houseLevel ?? 1;
+  if (level >= HOUSE_BUILD.MAX_LEVEL) return fail('MAX_LEVEL');
+
+  const target = level + 1;
+  const plan = HOUSE_BUILD.LEVELS[target];
+  if (unlockedHouseLevel(state.playerLevel ?? 1) < target) return fail('PLAYER_LEVEL_TOO_LOW');
+
+  for (const [itemId, count] of Object.entries(plan.materials)) {
+    if (inventoryCount(state, itemId) < count) return fail('NOT_ENOUGH_MATERIALS');
+  }
+  if (state.gold < plan.gold) return fail('NOT_ENOUGH_GOLD');
+
+  for (const [itemId, count] of Object.entries(plan.materials)) {
+    removeInventory(state, itemId, count);
+  }
+  state.gold -= plan.gold;
+  state.houseLevel = target;
+
+  return {
+    ok: true,
+    houseLevel: state.houseLevel,
+    gold: state.gold,
+    materials: { ...plan.materials },
   };
 }
 
