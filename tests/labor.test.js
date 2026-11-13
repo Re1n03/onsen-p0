@@ -459,3 +459,27 @@ test('L18 雅兴夹紧：深度3、雅兴1 推进倒地，fall.mood 不为负', 
   assert.equal(result.fall.depth, 4);
   assert.equal(state.explore, null);
 });
+
+test('L19 未知节点拒绝：UNKNOWN_NODE 状态逐字节不变，同夹具正常节点 16 → 14', () => {
+  const state = createInitialState({ seed: 1 });
+  startExplore(state);
+  const beforeJson = JSON.stringify(state);
+  const rngSeedBefore = state.rng.getSeed();
+  const visitRngSeedBefore = state.visitRng.getSeed();
+
+  const result = settleNode(state, 'INVALID_NODE');
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'UNKNOWN_NODE');
+  assert.equal(state.explore.mood, 16);
+  assert.equal(state.explore.depth, 0);
+  assert.equal(JSON.stringify(state), beforeJson);
+  assert.equal(state.rng.getSeed(), rngSeedBefore);
+  assert.equal(state.visitRng.getSeed(), visitRngSeedBefore);
+
+  // 对照：同夹具走正常资源点节点，雅兴按原值从 16 扣至 14
+  const normal = settleNode(state, 'RESOURCE');
+  assert.equal(normal.ok, true);
+  assert.equal(state.explore.mood, 14);
+  assert.equal(state.explore.depth, 1);
+});

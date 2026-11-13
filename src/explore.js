@@ -292,12 +292,15 @@ function stepCostFor(explore) {
   return cost;
 }
 
+const VALID_NODE_TYPES = new Set(['CAMPFIRE', 'RESOURCE', 'ENCOUNTER', 'EVENT']);
+
 /** 结算一个节点：本身负责「深度 +1、扣赶路、节点代价与效果」 */
 export function settleNode(state, nodeType, eventType) {
   const explore = state.explore;
   if (!explore) return fail('NOT_EXPLORING');
   if (explore.pendingEncounter) return fail('ENCOUNTER_PENDING');
   if (explore.pendingPickup) return fail('NEED_SWAP');
+  if (!VALID_NODE_TYPES.has(nodeType)) return fail('UNKNOWN_NODE');
 
   explore.depth += EXPLORE.DEPTH_PER_NODE;
   explore.mood -= stepCostFor(explore);
