@@ -469,3 +469,42 @@ test('Q21 同日连建：打烊后 2→3 连续成功，houseLevel 与余额字�
   assert.equal(state.closed, true);
   assert.equal(state.time, 0);
 });
+
+// ============================================================
+// Q22 houseLevel 缺失/null 按馆 1：成功升到馆 2
+// ============================================================
+test('Q22 houseLevel 缺失/null 按馆 1：成功升到馆 2', () => {
+  function fixture() {
+    const state = fresh();
+    state.playerLevel = 5;
+    state.gold = 3000;
+    stock(state, 1);
+    return state;
+  }
+
+  function expectBuiltFromLevelOne(state) {
+    const result = buildHouse(state);
+    assert.equal(result.ok, true);
+    assert.equal(result.houseLevel, 2);
+    assert.equal(state.houseLevel, 2);
+    assert.equal(state.gold, 0);
+    assert.deepEqual(state.inventory, {});
+  }
+
+  // a) 缺失 → undefined，按馆 1 处理
+  const missing = fixture();
+  delete missing.houseLevel;
+  assert.equal(missing.houseLevel, undefined);
+  expectBuiltFromLevelOne(missing);
+
+  // b) null → 按馆 1 处理
+  const nulled = fixture();
+  nulled.houseLevel = null;
+  assert.equal(nulled.houseLevel, null);
+  expectBuiltFromLevelOne(nulled);
+
+  // c) 同夹具对照：显式 1 级同样成功（Q12 已覆盖，这里只作对照）
+  const explicitOne = fixture();
+  explicitOne.houseLevel = 1;
+  expectBuiltFromLevelOne(explicitOne);
+});
