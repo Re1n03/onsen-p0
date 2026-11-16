@@ -483,3 +483,41 @@ test('L19 未知节点拒绝：UNKNOWN_NODE 状态逐字节不变，同夹具正
   assert.equal(state.explore.mood, 14);
   assert.equal(state.explore.depth, 1);
 });
+
+test('L20 未知节点校验在三个状态守卫之后：NOT_EXPLORING / ENCOUNTER_PENDING / NEED_SWAP 优先，状态不变', () => {
+  const UNKNOWN_NODE_TYPE = 'INVALID_NODE';
+
+  // a) 未进入采风：!explore 守卫优先于未知节点校验
+  const missingExplore = createInitialState({ seed: 1 });
+  assert.equal(missingExplore.explore, null);
+  const missingBefore = JSON.stringify(missingExplore);
+  const missingResult = settleNode(missingExplore, UNKNOWN_NODE_TYPE);
+  assert.equal(missingResult.ok, false);
+  assert.equal(missingResult.reason, 'NOT_EXPLORING');
+  assert.equal(JSON.stringify(missingExplore), missingBefore);
+
+  // b) 有未处理遭遇：沿用 L2 / X12b 的真实节点方式，先走 settleNode('ENCOUNTER')
+  const pendingEncounterState = createInitialState({ seed: 1 });
+  startExplore(pendingEncounterState);
+  settleNode(pendingEncounterState, 'ENCOUNTER');
+  assert.ok(pendingEncounterState.explore.pendingEncounter);
+  const pendingEncounterBefore = JSON.stringify(pendingEncounterState);
+  const pendingEncounterResult = settleNode(pendingEncounterState, UNKNOWN_NODE_TYPE);
+  assert.equal(pendingEncounterResult.ok, false);
+  assert.equal(pendingEncounterResult.reason, 'ENCOUNTER_PENDING');
+  assert.equal(JSON.stringify(pendingEncounterState), pendingEncounterBefore);
+
+  // c) 背包待换：按 N24 的夹具方式直接给 pendingPickup 赋值
+  const pendingPickupState = createInitialState({ seed: 1 });
+  startExplore(pendingPickupState);
+  pendingPickupState.explore.pendingPickup = { itemId: 'MAT_001', count: 1 };
+  assert.deepEqual(
+    pendingPickupState.explore.pendingPickup,
+    { itemId: 'MAT_001', count: 1 },
+  );
+  const pendingPickupBefore = JSON.stringify(pendingPickupState);
+  const pendingPickupResult = settleNode(pendingPickupState, UNKNOWN_NODE_TYPE);
+  assert.equal(pendingPickupResult.ok, false);
+  assert.equal(pendingPickupResult.reason, 'NEED_SWAP');
+  assert.equal(JSON.stringify(pendingPickupState), pendingPickupBefore);
+});
