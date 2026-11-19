@@ -1,5 +1,5 @@
 /**
- * tests/encounter.test.js — 遭遇系统 v2（N1~N16 + Y13 重录）
+ * tests/encounter.test.js — 遭遇系统 v2（N1~N13、N15~N16 + Y13 重录，N14 已随旧桩删除）
  *
  * 运行：node --test tests/encounter.test.js
  * 期望值都是字面数字。
@@ -21,7 +21,6 @@ import {
   inviteChance,
   negotiate,
   negotiationChance,
-  resolveEncounter,
   returnHome,
   rollInvitations,
   settleNode,
@@ -329,34 +328,6 @@ test('N13 邀请到访：两位 NPC 邀请态 chance 16 / 28；10000 次 14%~18%
     assert.deepEqual(trial.invites, []);
   }
   assert.ok(hit / 10000 >= 0.14 && hit / 10000 <= 0.18, `到访 ${hit}`);
-});
-
-test('N14 旧选项 FEED/VOUCHER/TALK/ESCAPE → UNKNOWN_OPTION，状态不变', () => {
-  const state = makeEncounter('ANT_FOREMAN');
-  const before = JSON.stringify({
-    mood: state.explore.mood,
-    depth: state.explore.depth,
-    backpack: state.explore.backpack,
-    lunchbox: state.explore.lunchbox,
-    vouchers: state.vouchers,
-    fragments: state.fragments,
-    pending: state.explore.pendingEncounter,
-  });
-
-  for (const option of ['FEED', 'VOUCHER', 'TALK', 'ESCAPE']) {
-    const result = resolveEncounter(state, option);
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, 'UNKNOWN_OPTION');
-  }
-  assert.equal(JSON.stringify({
-    mood: state.explore.mood,
-    depth: state.explore.depth,
-    backpack: state.explore.backpack,
-    lunchbox: state.explore.lunchbox,
-    vouchers: state.vouchers,
-    fragments: state.fragments,
-    pending: state.explore.pendingEncounter,
-  }), before);
 });
 
 test('N15 快照：强制圣骑士，谈判 [SNK, 碎片] 成功，再资源点', () => {

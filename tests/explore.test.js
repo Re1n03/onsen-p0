@@ -26,7 +26,6 @@ import {
   pickFamiliarCaretaker,
   pickLostBagOwner,
   pickup,
-  resolveEncounter,
   returnHome,
   settleNode,
   splitLostItems,

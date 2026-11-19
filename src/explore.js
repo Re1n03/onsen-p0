@@ -631,11 +631,6 @@ export function rollInvitations(state, rng = state.rng) {
   return rollInvitedVisitors(state, rng);
 }
 
-/** 旧选项已被移除；保留入口，统一返回 UNKNOWN_OPTION */
-export function resolveEncounter() {
-  return fail('UNKNOWN_OPTION');
-}
-
 // ============================================================
 // 倒地丢损与失物包
 // ============================================================
