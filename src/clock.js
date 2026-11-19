@@ -28,7 +28,6 @@ import {
   SNACKS,
   SNACK_SERVICE,
   TIME,
-  UNITS,
 } from '../config.js';
 import {
   addFragment,
@@ -66,11 +65,6 @@ function pickGuestId(state) {
 function seatGuest(state, seatIndex, guestId, now) {
   const guest = createGuest(state, guestId);
   guest.seatedAt = now;
-  // 体验券奖励：指定营业日的第一位入座客人门票 ×1.5（仅一次）
-  if (state.vipTicketDay === state.day) {
-    guest.vipTicket = true;
-    state.vipTicketDay = null;
-  }
   state.seats[seatIndex] = guest;
   state.daily.guestsSeated += 1;
   state.guestLastVisitDay[guestId] = state.day; // 熟客代管失物判定用（§5.1）
@@ -310,10 +304,6 @@ function departGuest(state, seatIndex, mode, now) {
   let repMultPct = state.reputation[faction] >= REPUTATION.TICKET_BONUS_THRESHOLD
     ? SETTLEMENT.REP_MULT_PCT
     : SETTLEMENT.REP_MULT_DEFAULT_PCT;
-  // 体验券奖励：门票 ×1.5（与声望乘区叠乘）
-  if (guest.vipTicket) {
-    repMultPct = Math.floor((repMultPct * SETTLEMENT.VIP_TICKET_PCT) / UNITS.PERCENT);
-  }
   const breakdown = settleBreakdown({
     comfort: guest.comfort,
     heart,

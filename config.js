@@ -76,8 +76,6 @@ export const POOL = {
   SHARED_TEMP: true,                 // 全池共享唯一水温，每位客人独立评价（§3.1）
   INGREDIENT_SLOTS: 3,               // 3 个投料槽（§8）
   TRAY_SLOTS: 1,                     // 1 个托盘槽（§8）
-  ARRIVAL_INTERVAL_MIN_SECONDS: 25,  // 到客间隔 25~40 秒随机（§3.1）
-  ARRIVAL_INTERVAL_MAX_SECONDS: 40,
   QUEUE_LIMIT: 3,                    // 候位上限 3 位（§3.1）
   PATIENCE_SECONDS: 45,              // 候位耐心 45 秒，超时离开、不计收益不扣声望（§3.1）
   BASE_STAY_SECONDS: 60,             // 基础停留 60 秒（§3.1）
@@ -89,7 +87,6 @@ export const POOL = {
 // ============================================================
 // 3.1 馆等级的到客间隔（占位值，㉔b 参数化）
 //     座位固定 2；馆等级只影响这里的到客间隔与 VISIT 的吸引力
-//     POOL.ARRIVAL_INTERVAL_* 保留但不再被读取（待清理）
 // ============================================================
 export const HOUSE_LEVELS = {
   1: { arrivalMinSeconds: 25, arrivalMaxSeconds: 40 },
@@ -238,7 +235,6 @@ export const SETTLEMENT = {
   AFFINITY_MULT_PER_HEART_PCT: 10, // 每 1 心 +0.10×（§3.7）
   TIP_MULT_DEFAULT_PCT: 100,       // 小费乘区默认 1.00×（§3.7）
   ANGRY_FEE_PCT: 50,               // 怒离只收一半门票 = 25G，无小费无小食（§3.7 + P0 补充）
-  VIP_TICKET_PCT: 150,             // 体验券奖励：次日 1 位客人门票 1.50×，仅一次（§4.4）
 };
 
 // ============================================================
@@ -257,13 +253,11 @@ export const AFFINITY = {
   DAILY_EXP_CAP: 60,              // 每位 NPC 每日好感经验合计上限 60（§6）
   GAIN_VISIT: 10,                 // 到店光顾 +10（§6）
   GAIN_HIGH_COMFORT_LEAVE: 20,    // 满意度 ≥80 离场 +20（§6）
-  GAIN_FEED_PREFERRED_SNACK: 30,  // 投喂偏好小食 +30（§6；P0 偏好对应未定，见清单）
   RANSOM_AFFINITY_COST: 30,       // 赎回失物 −30，只扣一次、最低到 0（§5.2/§6 + P0补④）
   INITIAL_EXP: {
     GUEST_BONE_KING_GUARD: 0,     // 开局好感 0 经验（P0补④）
     GUEST_WANDERING_SKELETON: 0,  // 开局 0（P0补④）
     GUEST_APPRENTICE_SWORDSMAN: 0,// 开局 0（P0补④）
-    PALADIN_APPRENTICE: 100,      // 见习圣骑士不在汤池，开局 1 心（P0补④）
     APPRENTICE_PALADIN: 100,      // 遭遇系统 v2 NPC id（与旧 id 同步开局 1 心）
   },
 };
@@ -608,11 +602,6 @@ export const NEGOTIATION = {
 
 export const FIGHT = {
   COST_MULTIPLIER: 2,         // 战斗支付 2 × ENCOUNTER(深度)
-};
-
-export const INVITATION = {
-  BASE_CHANCE_PCT: 20,        // P0 占位：基础 20%
-  BONUS_CHANCE_PCT: 5,        // P0 占位：加成 5%（㉒a 起由 VISIT 公式取代，字段保留待清理）
 };
 
 // ============================================================

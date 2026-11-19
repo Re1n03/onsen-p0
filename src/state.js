@@ -103,7 +103,6 @@ export function createInitialState({ seed = 1 } = {}) {
     lostBags: [],                // 倒地生成的失物包列表（可同时存在多个，各自计时）
     lostBagSeq: 0,               // 失物包唯一 id 的自增序号
     guestLastVisitDay: {},       // 熟客最近一次入池的营业日（失物代管判定用）
-    vipTicketDay: null,          // （已停用：体验券不再给门票加成，字段保留待清）
 
     // ---- 温泉馆吸引力与到访（A.20）----
     houseLevel: 1,               // 馆等级（默认 1，本步不做玩家等级）
