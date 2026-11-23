@@ -22,11 +22,14 @@ import {
   ENCOUNTERS,
   MATERIALS,
   SNACKS,
+  PLAYER_LEVEL,
 } from '../config.js';
 import { createInitialState, getHeart } from './state.js';
 import { tick } from './clock.js';
 import { getTempZone, tempBandSegments } from './bath.js';
 import { buy, changeWater, closeDay, dropMaterial, dropSnack } from './actions.js';
+import { isTeachingDay, needExp } from './player.js';
+import { REASON_TEXT } from './messages.js';
 
 // ---------- 格式化 ----------
 const byId = (id) => document.getElementById(id);
@@ -41,20 +44,6 @@ const ZONE_LABEL = {
   TOLERANT: '耐受区',
   UNCOMFORTABLE: '不适区（持续扣分）',
   EXTREME: '极限区',
-};
-
-const REASON_TEXT = {
-  DAY_CLOSED: '今天已经打烊了',
-  ALREADY_CLOSED: '今天已经打过烊了',
-  NOT_ENOUGH_GOLD: '金币不够',
-  UNKNOWN_ITEM: '没有这种物品',
-  INVALID_SLOT: '没有这个投料槽',
-  SLOT_OCCUPIED: '这个槽位还在生效中',
-  NO_ITEM: '背包里没有这件东西',
-  GUEST_NOT_FOUND: '这位客人不在池里',
-  NO_ORDERING_GUEST: '这位客人现在没有点单',
-  TRAY_FULL: '托盘已经有一份小食了',
-  ALREADY_CHANGING: '正在换水',
 };
 
 const SHOP_IDS = [...Object.keys(MATERIALS), ...Object.keys(SNACKS)];
@@ -104,6 +93,32 @@ function buildHud() {
     hud.appendChild(chip);
     refs.hud[key] = chip;
   }
+
+  // 馆等级（只读展示，不放进 interactive）
+  const houseChip = make('span', 'chip');
+  houseChip.dataset.hud = 'house-level';
+  hud.appendChild(houseChip);
+  refs.hud.houseLevel = houseChip;
+
+  // 玩家等级与经验条（只读展示，不放进 interactive）
+  const expChip = make('span', 'chip hud-exp');
+  const playerLevel = make('span');
+  playerLevel.dataset.hud = 'player-level';
+  const playerExpText = make('span', 'hud-exp-text');
+  playerExpText.dataset.hud = 'player-exp-text';
+  const expBar = make('span', 'bar hud-exp-bar');
+  const playerExpFill = make('span');
+  playerExpFill.dataset.hud = 'player-exp-fill';
+  expBar.appendChild(playerExpFill);
+  const teachNote = make('small', 'hud-teach', '教学日不计经验');
+  teachNote.dataset.hud = 'teach-note';
+  expChip.append(playerLevel, playerExpText, expBar, teachNote);
+  hud.appendChild(expChip);
+
+  refs.hud.playerLevel = playerLevel;
+  refs.hud.playerExpText = playerExpText;
+  refs.hud.playerExpFill = playerExpFill;
+  refs.hud.teachNote = teachNote;
 }
 
 function buildControls() {
@@ -278,6 +293,23 @@ function renderHud() {
   refs.hud.credit.textContent = `赊账 ${state.credit}G`;
   refs.hud.vouchers.textContent = `体验券 ${state.vouchers}`;
   refs.hud.fragments.textContent = `碎片 ${state.fragments}`;
+
+  // 馆等级缺失或 null 按馆 1
+  refs.hud.houseLevel.textContent = `馆 Lv.${state.houseLevel ?? 1}`;
+
+  // 玩家等级与经验条（只读 state.playerLevel 与 state.playerExp）
+  const level = state.playerLevel;
+  refs.hud.playerLevel.textContent = `玩家 Lv.${level}`;
+  if (level >= PLAYER_LEVEL.MAX) {
+    refs.hud.playerExpText.textContent = '已满级';
+    refs.hud.playerExpFill.style.width = '100%';
+  } else {
+    const need = needExp(level);
+    const pct = Math.min(UNITS.PERCENT, Math.floor((state.playerExp * UNITS.PERCENT) / need));
+    refs.hud.playerExpText.textContent = `${state.playerExp}/${need}`;
+    refs.hud.playerExpFill.style.width = `${pct}%`;
+  }
+  refs.hud.teachNote.hidden = !isTeachingDay(state);
 }
 
 function renderControls() {
@@ -529,6 +561,11 @@ function newRun() {
 
 export function getSpeed() {
   return speed;
+}
+
+/** 只读返回当前界面 state 引用（供测试重置与校验用） */
+export function getState() {
+  return state;
 }
 
 // ============================================================
