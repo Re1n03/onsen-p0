@@ -249,6 +249,12 @@ test('U2 玩家等级与经验条：教学日小字、进度计算、不读 expL
   assert.equal(findHud('player-exp-text').textContent, '90/60');
   assert.equal(findHud('player-exp-fill').style.width, '100%');
 
+  // 非整数百分比向下取整（55 * 100 / 60 = 91.67 → 91%）
+  state.playerExp = 55;
+  ui.render();
+  assert.equal(findHud('player-exp-text').textContent, '55/60');
+  assert.equal(findHud('player-exp-fill').style.width, '91%');
+
   // 真实 grantExp 升到 2 级
   state.playerExp = 0;
   const gained = grantExp(state, 60, 'guest', 0);
@@ -266,6 +272,15 @@ test('U3 满级：真实 grantExp 升至 30 级显示已满级与 100%，再入�
   const state = resetUi();
   state.day = 4;
   state.playerLevel = 29;
+  state.playerExp = 0;
+
+  // 29 级未满级边界（needExp(29) = 242，100 * 100 / 242 = 41.32 → 41%）
+  state.playerExp = 100;
+  ui.render();
+  assert.equal(findHud('player-level').textContent, '玩家 Lv.29');
+  assert.equal(findHud('player-exp-text').textContent, '100/242');
+  assert.equal(findHud('player-exp-fill').style.width, '41%');
+  assert.equal(findHud('teach-note').hidden, true);
   state.playerExp = 0;
 
   grantExp(state, 99999, 'guest', 0);
